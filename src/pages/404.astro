@@ -1,0 +1,35 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Not Found — Windward Labs">
+  <main class="not-found">
+    <h1 class="not-found-title">Not Found</h1>
+    <a href="/" class="not-found-link">Windward Labs</a>
+  </main>
+</BaseLayout>
+
+<style>
+  .not-found {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .not-found-title {
+    font-family: var(--font-sans);
+    font-weight: 300;
+    font-size: clamp(1.5rem, 3vw, 2.5rem);
+    margin-bottom: 3rem;
+  }
+
+  .not-found-link {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-small);
+    letter-spacing: 0.15em;
+  }
+</style>

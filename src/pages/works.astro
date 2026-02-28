@@ -1,0 +1,33 @@
+---
+import PageLayout from '../layouts/PageLayout.astro';
+import { getCollection } from 'astro:content';
+
+const projects = await getCollection('projects');
+---
+
+<PageLayout title="Works — Windward Labs" description="Selected projects by Windward Labs.">
+  <h1>Works</h1>
+
+  {projects.length > 0 ? (
+    <ul class="works-list">
+      {projects.map((project) => (
+        <li>
+          <a href={`/works/${project.id}`}>{project.data.title}</a>
+        </li>
+      ))}
+    </ul>
+  ) : (
+    <p class="empty-state">Coming soon.</p>
+  )}
+</PageLayout>
+
+<style>
+  .works-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .empty-state {
+    color: var(--color-text-secondary);
+  }
+</style>

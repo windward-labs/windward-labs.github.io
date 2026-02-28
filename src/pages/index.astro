@@ -1,0 +1,39 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import '../styles/animations.css';
+---
+
+<BaseLayout title="Windward Labs">
+  <main class="home">
+    <img src="/wwl-logomark.svg" alt="Windward Labs" class="home-logo animate-fade-in" />
+    <a href="mailto:contact@windwardlabs.xyz" class="home-email animate-fade-in-delay">
+      contact@windwardlabs.xyz
+    </a>
+  </main>
+</BaseLayout>
+
+<style>
+  .home {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100dvh;
+    text-align: center;
+    padding: 2rem;
+  }
+
+  .home-logo {
+    width: clamp(120px, 15vw, 180px);
+    height: auto;
+    margin-bottom: 8rem;
+  }
+
+  .home-email {
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: var(--font-size-small);
+    color: var(--color-text-secondary);
+    letter-spacing: 0.15em;
+  }
+</style>

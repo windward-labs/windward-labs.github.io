@@ -1,0 +1,33 @@
+---
+import PageLayout from '../layouts/PageLayout.astro';
+import { getCollection } from 'astro:content';
+
+const posts = await getCollection('writing');
+---
+
+<PageLayout title="Journal — Windward Labs" description="Essays and notes from Windward Labs.">
+  <h1>Journal</h1>
+
+  {posts.length > 0 ? (
+    <ul class="journal-list">
+      {posts.map((post) => (
+        <li>
+          <a href={`/journal/${post.id}`}>{post.data.title}</a>
+        </li>
+      ))}
+    </ul>
+  ) : (
+    <p class="empty-state">Coming soon.</p>
+  )}
+</PageLayout>
+
+<style>
+  .journal-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .empty-state {
+    color: var(--color-text-secondary);
+  }
+</style>

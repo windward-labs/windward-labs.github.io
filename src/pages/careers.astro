@@ -1,0 +1,61 @@
+---
+import PageLayout from '../layouts/PageLayout.astro';
+---
+
+<PageLayout title="Careers — Windward Labs" description="Join our team at Windward Labs.">
+  <h1>Careers</h1>
+
+  <p>Join our team at Windward Labs and help us elevate the next generation of onchain creators. We're building innovative software and physical experiences that move millions of dollars through the Ethereum ecosystem.</p>
+
+  <h2>Open Positions</h2>
+
+  <div class="job-listing">
+    <a href="/careers/head-of-amps" class="job-title">Head of Amps</a>
+    <p class="job-description">Lead the strategic direction and growth of our Amps product. Own the vision for social engagement monetization and drive cross-functional initiatives to scale our Farcaster-based platform.</p>
+    <p class="job-meta">$100k – $120k + token grant</p>
+  </div>
+
+  <div class="job-listing">
+    <a href="/careers/full-stack-engineer" class="job-title">Fullstack Engineer</a>
+    <p class="job-description">Working across our product portfolio to deliver clean, scalable, and maintainable code. Working closely with customers to deliver delightful experiences and securely move millions of dollars onchain.</p>
+    <p class="job-meta">$180k – $200k + equity</p>
+  </div>
+
+  <h2>About Windward Labs</h2>
+  <p>Windward Labs is a creative agency that delivers software and physical experiences to elevate the next generation of onchain creators. We are deeply optimistic and believe that a small group of people can make an outsized impact on the world through their work.</p>
+
+  <h2>Culture</h2>
+  <ul>
+    <li>High-integrity, low-ego team</li>
+    <li>Flexible hours within a US based timezone (Pacific Time)</li>
+    <li>Remote-US preferred</li>
+    <li>Health/vision/dental benefits</li>
+  </ul>
+</PageLayout>
+
+<style>
+  .job-listing {
+    margin: 1.5rem 0;
+    padding: 1.5rem;
+    border: 1px solid var(--color-border);
+  }
+
+  .job-title {
+    font-family: var(--font-sans);
+    font-weight: 600;
+    font-size: clamp(1.1rem, 1.5vw, 1.3rem);
+    display: block;
+    margin-bottom: 0.5rem;
+  }
+
+  .job-description {
+    color: var(--color-text);
+    margin-bottom: 0.5rem;
+  }
+
+  .job-meta {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-small);
+    margin-bottom: 0;
+  }
+</style>

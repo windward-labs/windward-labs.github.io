@@ -1,0 +1,54 @@
+---
+import PageLayout from './PageLayout.astro';
+
+interface Props {
+  frontmatter: {
+    title: string;
+    description?: string;
+    date?: string;
+  };
+}
+
+const { frontmatter } = Astro.props;
+---
+
+<PageLayout title={frontmatter.title} description={frontmatter.description}>
+  <article class="article">
+    <header class="article-header">
+      <h1>{frontmatter.title}</h1>
+      {frontmatter.date && (
+        <time class="article-date" datetime={frontmatter.date}>
+          {new Date(frontmatter.date).toLocaleDateString('en-US', {
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric',
+          })}
+        </time>
+      )}
+    </header>
+    <div class="article-body">
+      <slot />
+    </div>
+  </article>
+</PageLayout>
+
+<style>
+  .article-header {
+    margin-bottom: 2.5rem;
+  }
+
+  .article-date {
+    display: block;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-small);
+    margin-top: 0.5rem;
+  }
+
+  .article-body :global(h2) {
+    margin-top: 2.5rem;
+  }
+
+  .article-body :global(p + p) {
+    margin-top: 0.75rem;
+  }
+</style>

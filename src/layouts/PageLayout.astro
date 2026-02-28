@@ -1,0 +1,37 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import Nav from '../components/Nav.astro';
+import Footer from '../components/Footer.astro';
+
+interface Props {
+  title: string;
+  description?: string;
+}
+
+const { title, description } = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+  <Nav />
+  <main class="page-content">
+    <slot />
+  </main>
+  <Footer />
+</BaseLayout>
+
+<style>
+  .page-content {
+    max-width: var(--content-width);
+    margin: 0 auto;
+    padding: var(--content-padding);
+    padding-top: 2rem;
+    min-height: 60vh;
+  }
+
+  @media (max-width: 768px) {
+    .page-content {
+      padding-left: 1.25rem;
+      padding-right: 1.25rem;
+    }
+  }
+</style>
