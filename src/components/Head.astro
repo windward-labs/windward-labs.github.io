@@ -21,14 +21,14 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 <meta property="og:url" content={canonicalURL} />
 <meta property="og:title" content={title} />
 <meta property="og:description" content={description} />
-<meta property="og:image" content={new URL('/wwl-og.png', Astro.site)} />
+<meta property="og:image" content={new URL('/wwl-og.png', Astro.site).href} />
 <meta property="og:site_name" content="Windward Labs" />
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content={title} />
 <meta name="twitter:description" content={description} />
-<meta name="twitter:image" content={new URL('/wwl-og.png', Astro.site)} />
+<meta name="twitter:image" content={new URL('/wwl-og.png', Astro.site).href} />
 
 <!-- Font preloads -->
 <link rel="preload" href="/fonts/Geist-Light.woff2" as="font" type="font/woff2" crossorigin />
