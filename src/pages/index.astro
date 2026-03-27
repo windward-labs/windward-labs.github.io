@@ -4,36 +4,85 @@ import '../styles/animations.css';
 ---
 
 <BaseLayout title="Windward Labs">
-  <main class="home">
-    <img src="/wwl-logomark.svg" alt="Windward Labs" class="home-logo animate-fade-in" />
-    <a href="mailto:contact@windwardlabs.xyz" class="home-email animate-fade-in-delay">
-      contact@windwardlabs.xyz
-    </a>
+  <main class="manifesto">
+    <header class="manifesto-header animate-fade-in">
+      <strong>Windward Labs</strong>
+    </header>
+
+    <section class="manifesto-section animate-fade-in">
+      <p class="section-number"><strong>I.</strong></p>
+      <p>The most valuable opportunities are hiding in plain sight.</p>
+      <p>The world is optimized for legitimacy. Our systems for allocating talent and capital are rational, efficient, and, at scale, a force that leaves entire categories of valuable projects undone.</p>
+      <p>We go looking for those projects.</p>
+    </section>
+
+    <section class="manifesto-section animate-fade-in">
+      <p class="section-number"><strong>II.</strong></p>
+      <p>Progress cannot come from the collective.</p>
+      <p>Groups can refine, distribute, and scale. They cannot originate.</p>
+      <p>New things come from individual people, at particular moments, exerting their will on the world.</p>
+      <p>We find a way to work with these individuals.</p>
+    </section>
+
+    <section class="manifesto-section animate-fade-in">
+      <p class="section-number"><strong>III.</strong></p>
+      <p>New tools do not automatically produce new thinking.</p>
+      <p>The cost of building has collapsed. Anyone can ship a product, launch a campaign, generate an image. Most do, and most produce work that looks exactly like everything else. Better tools in service of conventional thinking produce conventional work, faster.</p>
+      <p>We are in pursuit of the extraordinary.</p>
+    </section>
+
+    <section class="manifesto-section animate-fade-in">
+      <p class="section-number"><strong>IV.</strong></p>
+      <p>The enemy is not a competitor. It is a way of thinking.</p>
+      <p>It is the assumption that the right answer is the one that's easiest to explain. Most organizations never question that assumption because it is comfortable and it is safe.</p>
+      <p>The world does not arrange itself into clean categories. The interesting answers live in the space between.</p>
+      <p>We have chosen to work there, when it is convenient and when it is not.</p>
+    </section>
+
+    <section class="manifesto-section animate-fade-in">
+      <p class="section-number"><strong>V.</strong></p>
+      <p>We seek out partners who understand that the obvious answer isn't enough.</p>
+      <p>They have seen what competent looks like. They are after something else, work that couldn't have been made by anyone else, at any other moment.</p>
+      <p>We are a product studio and a creative agency. We are seeking out partners in pursuit of the unconventional.</p>
+    </section>
   </main>
 </BaseLayout>
 
 <style>
-  .home {
+  .manifesto {
+    max-width: var(--content-width);
+    margin: 0 auto;
+    padding: var(--content-padding);
+    padding-top: clamp(2rem, 4vh, 3rem);
+    padding-bottom: clamp(2rem, 4vh, 3rem);
+    max-height: 100dvh;
     display: flex;
     flex-direction: column;
-    align-items: center;
     justify-content: center;
-    min-height: 100dvh;
-    text-align: center;
-    padding: 2rem;
   }
 
-  .home-logo {
-    width: clamp(120px, 15vw, 180px);
-    height: auto;
-    margin-bottom: 8rem;
+  .manifesto-header {
+    font-size: var(--font-size-body);
+    margin-bottom: 1rem;
   }
 
-  .home-email {
-    font-family: var(--font-sans);
-    font-weight: 400;
-    font-size: var(--font-size-small);
-    color: var(--color-text-secondary);
-    letter-spacing: 0.15em;
+  .manifesto-section {
+    margin-bottom: 1rem;
+  }
+
+  .manifesto-section:last-child {
+    margin-bottom: 0;
+  }
+
+  .section-number {
+    margin-bottom: 0.35rem;
+  }
+
+  .manifesto-section p {
+    margin-bottom: 0.35rem;
+  }
+
+  .manifesto-section p:last-child {
+    margin-bottom: 0;
   }
 </style>

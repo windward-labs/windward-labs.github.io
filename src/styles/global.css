@@ -18,10 +18,10 @@
   --font-mono: 'Geist Mono', ui-monospace, monospace;
 
   --font-size-hero: clamp(2.4rem, 5vw, 5rem);
-  --font-size-body: clamp(1rem, 1.2vw, 1.2rem);
+  --font-size-body: 12px;
   --font-size-small: clamp(0.85rem, 1vw, 0.95rem);
 
-  --content-width: 640px;
+  --content-width: 700px;
   --content-padding: clamp(1.5rem, 4vw, 3rem);
 }
 
