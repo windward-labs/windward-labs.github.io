@@ -17,9 +17,24 @@
   animation: fadeIn 1.2s ease-out 0.3s both;
 }
 
+.stagger-1 { animation: fadeIn 0.8s ease-out 0.1s both; }
+.stagger-2 { animation: fadeIn 0.8s ease-out 0.25s both; }
+.stagger-3 { animation: fadeIn 0.8s ease-out 0.4s both; }
+.stagger-4 { animation: fadeIn 0.8s ease-out 0.55s both; }
+.stagger-5 { animation: fadeIn 0.8s ease-out 0.7s both; }
+.stagger-6 { animation: fadeIn 0.8s ease-out 0.85s both; }
+.stagger-last { animation: fadeIn 0.8s ease-out 1.1s both; }
+
 @media (prefers-reduced-motion: reduce) {
   .animate-fade-in,
-  .animate-fade-in-delay {
+  .animate-fade-in-delay,
+  .stagger-1,
+  .stagger-2,
+  .stagger-3,
+  .stagger-4,
+  .stagger-5,
+  .stagger-last,
+  .stagger-6 {
     animation: none;
     opacity: 1;
     transform: none;
