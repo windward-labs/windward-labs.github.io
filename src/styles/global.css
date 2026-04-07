@@ -32,7 +32,7 @@ html {
 }
 
 body {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-weight: 400;
   font-size: var(--font-size-body);
   line-height: 1.6;
@@ -45,14 +45,35 @@ body {
   color: var(--color-bg);
 }
 
+[data-theme="dark"] ::selection {
+  background-color: #e0e0e0;
+  color: #0a0a0a;
+}
+
 a {
   color: inherit;
   text-decoration: none;
+  position: relative;
+  isolation: isolate;
+}
+
+a::after {
+  content: '';
+  position: absolute;
+  inset: -1px -4px;
+  background: #FFFF00;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: -1;
 }
 
 a:hover {
-  opacity: 0.6;
-  transition: opacity 0.2s ease;
+  opacity: 1;
+  color: #000;
+}
+
+a:hover::after {
+  opacity: 1;
 }
 
 img {
@@ -62,7 +83,7 @@ img {
 }
 
 h1, h2, h3, h4 {
-  font-family: var(--font-sans);
+  font-family: var(--font-mono);
   font-weight: 600;
   line-height: 1.3;
 }

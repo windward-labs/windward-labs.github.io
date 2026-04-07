@@ -4,66 +4,225 @@ import '../styles/animations.css';
 ---
 
 <BaseLayout title="Windward Labs">
-  <main class="manifesto">
-    <header class="manifesto-header stagger-1">
-      <strong>Windward Labs</strong>
-    </header>
+  <div class="hero">
+    <img src="/light.png" alt="" class="hero-img hero-img-light" />
+    <img src="/dark.png" alt="" class="hero-img hero-img-dark" />
 
-    <section class="manifesto-section stagger-2">
-      <p class="section-number stagger-last"><strong>I.</strong></p>
-      <p>The most valuable opportunities are hiding in plain sight.</p>
-      <p>The world is optimized for legitimacy. Our systems for allocating talent and capital are rational, efficient, and, at scale, a force that leaves entire categories of valuable projects undone.</p>
-      <p>We go looking for those projects.</p>
-    </section>
+    <nav class="hero-nav">
+      <a href="/" class="hero-logo">
+        <svg width="338" height="165" viewBox="0 0 338 165" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <g clip-path="url(#clip0_7761_3)">
+            <path d="M81.6222 114.901L117.237 32.8122H117.587L120.507 114.901H145.612L183.796 33.5128L189.401 114.901H214.74L250.471 32.8122H250.822L253.741 114.901H278.846L332.677 -0.00012207H307.455L272.424 83.8406H272.074L269.155 -0.00012207H244.983L208.668 84.1909H208.317L206.683 -0.00012207H199.443H181.46H174.221L139.19 83.8406H138.839L135.92 -0.00012207H111.866L75.4334 84.1909H75.0831L73.5651 -0.00012207H48.2261L56.1664 114.901H81.6222Z" fill="white"/>
+            <path d="M24.5217 139.54V0H0V164.062H337.465V139.54H24.5217Z" fill="white"/>
+          </g>
+          <defs>
+            <clipPath id="clip0_7761_3">
+              <rect width="337.465" height="164.062" fill="white"/>
+            </clipPath>
+          </defs>
+        </svg>
+      </a>
+      <button class="theme-toggle" type="button" aria-label="Toggle dark mode">
+        <svg class="toggle-icon toggle-icon-moon" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
+        <svg class="toggle-icon toggle-icon-sun" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+      </button>
+    </nav>
+  </div>
 
-    <section class="manifesto-section stagger-3">
-      <p class="section-number stagger-last"><strong>II.</strong></p>
-      <p>Progress cannot come from the collective.</p>
-      <p>Groups can refine, distribute, and scale. They cannot originate.</p>
-      <p>New things come from individual people, at particular moments, exerting their will on the world.</p>
-      <p>We find a way to work with these individuals.</p>
-    </section>
+  <main class="home">
+    <div class="col col-left">
+      <div class="manifesto">
+        <section class="manifesto-section stagger-1">
+          <p class="section-number"><strong>I.</strong></p>
+          <p>The most valuable opportunities are hiding in plain sight.</p>
+          <p>The world is optimized for legitimacy. Our systems for allocating talent and capital are rational, efficient, and, at scale, a force that leaves entire categories of valuable projects undone.</p>
+          <p>We go looking for those projects.</p>
+        </section>
 
-    <section class="manifesto-section stagger-4">
-      <p class="section-number stagger-last"><strong>III.</strong></p>
-      <p>New tools do not automatically produce new thinking.</p>
-      <p>The cost of building has collapsed. Anyone can ship a product, launch a campaign, generate an image. Most do, and most produce work that looks exactly like everything else. Better tools in service of conventional thinking produce conventional work, faster.</p>
-      <p>We are in pursuit of the extraordinary.</p>
-    </section>
+        <section class="manifesto-section stagger-2">
+          <p class="section-number"><strong>II.</strong></p>
+          <p>Progress cannot come from the collective.</p>
+          <p>Groups can refine, distribute, and scale. They cannot originate.</p>
+          <p>New things come from individual people, at particular moments, exerting their will on the world.</p>
+          <p>We find a way to work with these individuals.</p>
+        </section>
 
-    <section class="manifesto-section stagger-5">
-      <p class="section-number stagger-last"><strong>IV.</strong></p>
-      <p>The enemy is not a competitor. It is a way of thinking.</p>
-      <p>It is the assumption that the right answer is the one that's easiest to explain. Most organizations never question that assumption because it is comfortable and it is safe.</p>
-      <p>The world does not arrange itself into clean categories. The interesting answers live in the space between.</p>
-      <p>We have chosen to work there, when it is convenient and when it is not.</p>
-    </section>
+        <section class="manifesto-section stagger-3">
+          <p class="section-number"><strong>III.</strong></p>
+          <p>New tools do not automatically produce new thinking.</p>
+          <p>The cost of building has collapsed. Anyone can ship a product, launch a campaign, generate an image. Most do, and most produce work that looks exactly like everything else. Better tools in service of conventional thinking produce conventional work, faster.</p>
+          <p>We are in pursuit of the extraordinary.</p>
+        </section>
 
-    <section class="manifesto-section stagger-6">
-      <p class="section-number stagger-last"><strong>V.</strong></p>
-      <p>We seek out partners who understand that the obvious answer isn't enough.</p>
-      <p>Our partners have seen what competent looks like. They are after something else: work that couldn't have been made by anyone else, at any other moment.</p>
-      <p>We are a product studio and a creative agency. We look in unconventional places for work worth doing extraordinarily well.</p>
-    </section>
+        <section class="manifesto-section stagger-4">
+          <p class="section-number"><strong>IV.</strong></p>
+          <p>The enemy is not a competitor. It is a way of thinking.</p>
+          <p>It is the assumption that the right answer is the one that's easiest to explain. Most organizations never question that assumption because it is comfortable and it is safe.</p>
+          <p>The world does not arrange itself into clean categories. The interesting answers live in the space between.</p>
+          <p>We have chosen to work there, when it is convenient and when it is not.</p>
+        </section>
+
+        <section class="manifesto-section stagger-5">
+          <p class="section-number"><strong>V.</strong></p>
+          <p>We seek out partners who understand that the obvious answer isn't enough.</p>
+          <p>Our partners have seen what competent looks like. They are after something else: work that couldn't have been made by anyone else, at any other moment.</p>
+          <p>We are a product studio and a creative agency. We look in unconventional places for work worth doing extraordinarily well.</p>
+        </section>
+      </div>
+    </div>
+
+    <div class="col col-right">
+      <div class="right-inner">
+        <div class="right-section">
+          <p class="right-heading"><strong>Windward Labs</strong></p>
+          <p>branding systems</p>
+          <p>web sites</p>
+          <p>digital tools</p>
+          <p>experiences</p>
+
+          <p class="right-heading" style="margin-top: 1rem;">Our Work</p>
+          <p><a href="https://brightmoments.io" target="_blank">Bright Moments</a></p>
+          <p><a href="https://ribbit.com" target="_blank">Ribbit Capital</a></p>
+          <p><a href="https://cryptopunks.app" target="_blank">CryptoPunks</a></p>
+          <p><a href="https://nodefoundation.com" target="_blank">NODE</a></p>
+        </div>
+
+        <div class="right-section">
+          <p><a href="mailto:hi@windwardlabs.xyz">hi@windwardlabs.xyz</a></p>
+        </div>
+      </div>
+    </div>
   </main>
 </BaseLayout>
 
+<script>
+  const toggle = document.querySelector('.theme-toggle');
+  const root = document.documentElement;
+
+  const saved = localStorage.getItem('theme');
+  if (saved === 'dark') root.setAttribute('data-theme', 'dark');
+
+  toggle?.addEventListener('click', () => {
+    const isDark = root.getAttribute('data-theme') === 'dark';
+    if (isDark) {
+      root.removeAttribute('data-theme');
+      localStorage.setItem('theme', 'light');
+    } else {
+      root.setAttribute('data-theme', 'dark');
+      localStorage.setItem('theme', 'dark');
+    }
+  });
+</script>
+
 <style>
-  .manifesto {
-    max-width: var(--content-width);
-    margin: 0 auto;
-    padding: var(--content-padding);
-    padding-top: clamp(2rem, 4vh, 3rem);
-    padding-bottom: clamp(2rem, 4vh, 3rem);
-    min-height: 100dvh;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
+  .hero {
+    position: relative;
+    height: 100dvh;
+    overflow: hidden;
   }
 
-  .manifesto-header {
-    font-size: var(--font-size-body);
-    margin-bottom: 1rem;
+  .hero-img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    transition: opacity 0.6s ease;
+  }
+
+  .hero-img-light {
+    opacity: 1;
+  }
+
+  .hero-img-dark {
+    opacity: 0;
+  }
+
+  :global([data-theme="dark"]) .hero-img-light {
+    opacity: 0;
+  }
+
+  :global([data-theme="dark"]) .hero-img-dark {
+    opacity: 1;
+  }
+
+  .hero-nav {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: clamp(1.5rem, 4vw, 2.5rem);
+    z-index: 1;
+  }
+
+  .hero-logo {
+    display: block;
+    opacity: 1;
+  }
+
+  .hero-logo::after {
+    display: none;
+  }
+
+  .hero-logo:hover {
+    opacity: 0.7;
+    color: inherit;
+  }
+
+  .hero-logo svg {
+    height: 24px;
+    width: auto;
+  }
+
+  .theme-toggle {
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.8;
+    transition: opacity 0.2s ease;
+  }
+
+  .theme-toggle:hover {
+    opacity: 1;
+  }
+
+  .toggle-icon-sun {
+    display: none;
+  }
+
+  :global([data-theme="dark"]) .toggle-icon-moon {
+    display: none;
+  }
+
+  :global([data-theme="dark"]) .toggle-icon-sun {
+    display: block;
+  }
+
+  .home {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    min-height: 100dvh;
+    transition: background-color 0.6s ease, color 0.6s ease;
+  }
+
+  :global([data-theme="dark"]) .home {
+    background-color: #0a0a0a;
+    color: #e0e0e0;
+  }
+
+  .col {
+    padding: clamp(1.5rem, 4vw, 3rem);
   }
 
   .manifesto-section {
@@ -84,5 +243,44 @@ import '../styles/animations.css';
 
   .manifesto-section p:last-child {
     margin-bottom: 0;
+  }
+
+  .right-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .right-section {
+  }
+
+  .right-heading {
+    margin-bottom: 0.35rem;
+  }
+
+  .right-section p {
+    margin-bottom: 0.2rem;
+  }
+
+  .right-section p:last-child {
+    margin-bottom: 0;
+  }
+
+  :global([data-theme="dark"]) .right-section a {
+    color: #e0e0e0;
+  }
+
+  :global([data-theme="dark"]) .right-section a:hover {
+    color: #000;
+  }
+
+  @media (max-width: 768px) {
+    .home {
+      grid-template-columns: 1fr;
+    }
+
+    .right-inner {
+      gap: 2rem;
+    }
   }
 </style>
