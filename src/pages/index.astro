@@ -35,6 +35,30 @@ import '../styles/animations.css';
 
   <main class="home">
     <div class="col col-left">
+      <div class="right-inner">
+        <div class="right-section">
+          <p class="right-heading"><strong>Windward Labs</strong></p>
+          <p>branding systems</p>
+          <p>web sites</p>
+          <p>digital tools</p>
+          <p>experiences</p>
+        </div>
+
+        <div class="right-section">
+          <p class="right-heading">Our Work</p>
+          <p><a href="https://brightmoments.io" target="_blank">Bright Moments</a></p>
+          <p><a href="https://ribbit.com" target="_blank">Ribbit Capital</a></p>
+          <p><a href="https://cryptopunks.app" target="_blank">CryptoPunks</a></p>
+          <p><a href="https://nodefoundation.com" target="_blank">NODE</a></p>
+        </div>
+
+        <div class="right-section">
+          <p><a href="mailto:hi@windwardlabs.xyz">hi@windwardlabs.xyz</a></p>
+        </div>
+      </div>
+    </div>
+
+    <div class="col col-right">
       <div class="manifesto">
         <section class="manifesto-section stagger-1">
           <p class="section-number"><strong>I.</strong></p>
@@ -72,28 +96,6 @@ import '../styles/animations.css';
           <p>Our partners have seen what competent looks like. They are after something else: work that couldn't have been made by anyone else, at any other moment.</p>
           <p>We are a product studio and a creative agency. We look in unconventional places for work worth doing extraordinarily well.</p>
         </section>
-      </div>
-    </div>
-
-    <div class="col col-right">
-      <div class="right-inner">
-        <div class="right-section">
-          <p class="right-heading"><strong>Windward Labs</strong></p>
-          <p>branding systems</p>
-          <p>web sites</p>
-          <p>digital tools</p>
-          <p>experiences</p>
-
-          <p class="right-heading" style="margin-top: 1rem;">Our Work</p>
-          <p><a href="https://brightmoments.io" target="_blank">Bright Moments</a></p>
-          <p><a href="https://ribbit.com" target="_blank">Ribbit Capital</a></p>
-          <p><a href="https://cryptopunks.app" target="_blank">CryptoPunks</a></p>
-          <p><a href="https://nodefoundation.com" target="_blank">NODE</a></p>
-        </div>
-
-        <div class="right-section">
-          <p><a href="mailto:hi@windwardlabs.xyz">hi@windwardlabs.xyz</a></p>
-        </div>
       </div>
     </div>
   </main>
@@ -211,8 +213,9 @@ import '../styles/animations.css';
 
   .home {
     display: grid;
-    grid-template-columns: 2fr 1fr;
-    min-height: 100dvh;
+    grid-template-columns: 1fr 1fr;
+    height: 100dvh;
+    overflow: hidden;
     transition: background-color 0.6s ease, color 0.6s ease;
   }
 
@@ -222,11 +225,11 @@ import '../styles/animations.css';
   }
 
   .col {
-    padding: clamp(1.5rem, 4vw, 3rem);
+    padding: clamp(1.25rem, 3vw, 2.5rem);
   }
 
   .manifesto-section {
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
   }
 
   .manifesto-section:last-child {
@@ -234,11 +237,11 @@ import '../styles/animations.css';
   }
 
   .section-number {
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.25rem;
   }
 
   .manifesto-section p {
-    margin-bottom: 0.35rem;
+    margin-bottom: 0.25rem;
   }
 
   .manifesto-section p:last-child {
@@ -277,6 +280,11 @@ import '../styles/animations.css';
   @media (max-width: 768px) {
     .home {
       grid-template-columns: 1fr;
+      height: auto;
+    }
+
+    .col {
+      height: 100dvh;
     }
 
     .right-inner {
