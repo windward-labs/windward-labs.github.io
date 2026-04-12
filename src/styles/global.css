@@ -62,18 +62,12 @@ a::after {
   position: absolute;
   inset: -1px -4px;
   background: #FFFF00;
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  opacity: 1;
   z-index: -1;
 }
 
 a:hover {
-  opacity: 1;
   color: #000;
-}
-
-a:hover::after {
-  opacity: 1;
 }
 
 img {
