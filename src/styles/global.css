@@ -76,6 +76,10 @@ a:hover {
   color: #000;
 }
 
+[data-theme="dark"] a {
+  color: #000;
+}
+
 img {
   max-width: 100%;
   height: auto;
