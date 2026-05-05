@@ -55,6 +55,8 @@ import '../styles/animations.css';
         <div class="right-section">
           <p><a href="mailto:hi@windwardlabs.xyz">hi@windwardlabs.xyz</a></p>
         </div>
+
+        <p class="home-copyright">&copy; 2026 Windward Labs, Inc.</p>
       </div>
     </div>
 
@@ -226,6 +228,23 @@ import '../styles/animations.css';
 
   .col {
     padding: clamp(1.25rem, 3vw, 2.5rem);
+  }
+
+  .col-left {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .col-left .right-inner {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .home-copyright {
+    margin-top: auto;
+    font-size: 10px;
+    color: #999;
   }
 
   .manifesto-section {
