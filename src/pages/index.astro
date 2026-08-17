@@ -52,45 +52,6 @@ import '../styles/animations.css';
       </div>
     </div>
 
-    <div class="col col-right">
-      <div class="manifesto">
-        <section class="manifesto-section stagger-1">
-          <p class="section-number"><strong>I.</strong></p>
-          <p>The most valuable opportunities are hiding in plain sight.</p>
-          <p>The world rewards what already looks legitimate. Talent and capital flow toward things that are easy to recognize, easy to explain, and easy to justify.</p>
-          <p>While this makes the system efficient, it also leaves entire categories of valuable work untouched.</p>
-          <p>We go looking for that work.</p>
-        </section>
-
-        <section class="manifesto-section stagger-2">
-          <p class="section-number"><strong>II.</strong></p>
-          <p>Consensus can refine an idea but it can't create one.</p>
-          <p>Groups can distribute, optimize, and scale. But new things begin with individuals making something before the world knows how to ask for it.</p>
-          <p>We find ways to work with those people.</p>
-        </section>
-
-        <section class="manifesto-section stagger-3">
-          <p class="section-number"><strong>III.</strong></p>
-          <p>New tools do not automatically produce new thinking.</p>
-          <p>The cost of building has collapsed. Anyone can ship a product, launch a campaign, or generate an image. The result is more output, not necessarily more originality.</p>
-          <p>Better tools in service of conventional thinking produce conventional work, faster.</p>
-        </section>
-
-        <section class="manifesto-section stagger-4">
-          <p class="section-number"><strong>IV.</strong></p>
-          <p>The enemy is not a competitor; it is a way of thinking.</p>
-          <p>It is the belief that the right answer is the easiest to explain.</p>
-          <p>The interesting work lives between categories: between art and technology, product and story, culture and commerce, intuition and system.</p>
-        </section>
-
-        <section class="manifesto-section stagger-5">
-          <p class="section-number"><strong>V.</strong></p>
-          <p>We seek partners who know the obvious answer is not enough.</p>
-          <p>They have seen competence. They are after work that is impossible to confuse with anything else.</p>
-          <p>Anything less is not worth building.</p>
-        </section>
-      </div>
-    </div>
   </main>
 </BaseLayout>
 
@@ -206,7 +167,7 @@ import '../styles/animations.css';
 
   .home {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr;
     height: 100dvh;
     overflow: hidden;
     transition: background-color 0.6s ease, color 0.6s ease;
@@ -234,37 +195,14 @@ import '../styles/animations.css';
 
   .home-copyright {
     margin-top: auto;
-    font-size: 10px;
+    font-size: inherit;
     color: #999;
   }
 
-  .manifesto-section {
-    margin-bottom: 1rem;
-  }
-
-  .manifesto-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .section-number {
-    margin-bottom: 0.25rem;
-  }
-
-  .manifesto-section p {
-    margin-bottom: 0.25rem;
-  }
-
-  .manifesto-section p:last-child {
-    margin-bottom: 0;
-  }
-
-  .right-inner {
+.right-inner {
     display: flex;
     flex-direction: column;
     gap: 2rem;
-  }
-
-  .right-section {
   }
 
   .right-heading {
@@ -285,17 +223,8 @@ import '../styles/animations.css';
 
   @media (max-width: 768px) {
     .home {
-      grid-template-columns: 1fr;
       height: auto;
       overflow: visible;
-    }
-
-    .col-left {
-      order: 2;
-    }
-
-    .col-right {
-      order: 1;
     }
 
     .right-inner {
