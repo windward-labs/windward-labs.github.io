@@ -1,0 +1,242 @@
+---
+import ServiceLayout from '../layouts/ServiceLayout.astro';
+import CreditCheckout from '../components/CreditCheckout.astro';
+import { thinkingLevels } from '../services/credits.mjs';
+import { creditPriceCents, formatPrice } from '../services/pricing.mjs';
+---
+<ServiceLayout title="Client account">
+  <div class="preview-note row"><span>Preview · resets on reload</span><div class="preview-role"><label for="preview-role">View as</label><select id="preview-role"><option value="manager">Account manager</option><option value="member">Team member</option><option value="studio">Windward</option></select></div></div>
+  <noscript><p>This interactive preview requires JavaScript. No account or payment service is connected.</p></noscript>
+  <section class="account section">
+    <div><h1>Example Studio</h1><p class="caption muted" id="identity">alex@example.com · account manager</p></div>
+    <div class="balance"><p class="balance-total"><strong id="available">24</strong> credits available</p><details class="balance-hold caption muted"><summary id="held">4 credits held for pending requests</summary><p>These credits are set aside until Windward accepts the work. Cancelling before acceptance, or a declined request, returns them to your available balance.</p></details><div id="purchase"><a id="open-checkout" href="/service/checkout/" aria-controls="checkout-panel" aria-expanded="false">Add credits</a></div><p id="manager-note" class="caption muted" hidden>Top-ups managed by Alex.</p></div>
+  </section>
+  <div id="account-content">
+  <div id="requests-panel">
+  <section class="section">
+    <div class="section-title"><h2 id="requests-title" tabindex="-1">New request</h2></div>
+    <form id="request-form" class="stack">
+      <div class="fields"><div><label for="brief">Brief</label><textarea id="brief" name="brief" rows="4" maxlength="2000" required placeholder="Describe the work."></textarea><div class="attachments"><label for="attachments">Attachments</label><input id="attachments" type="file" multiple aria-describedby="attachment-note" /><p id="attachment-note" class="caption muted">Up to 5 files, 20 MB each. Preview only; files stay in this tab.</p><ul id="attachment-list" aria-label="Selected attachments"></ul><p id="attachment-status" class="caption" role="status"></p></div></div><div><label for="credits">Thinking Level</label><select id="credits" name="credits" aria-describedby="level-cost">{thinkingLevels.map((level) => <option value={level.normal} selected={level.normal === 4}>{level.name} · {level.time}</option>)}</select><fieldset class="delivery-field" aria-describedby="speed-note"><legend>Delivery</legend><div class="delivery-tabs"><label><input id="speed-normal" type="radio" name="speed" value="normal" checked /><span>Normal · 48h</span></label><label><input id="speed-fast" type="radio" name="speed" value="fast" /><span>Fast · 24h</span></label></div></fieldset><p id="level-cost" class="caption muted" aria-live="polite">4 credits · 1 hour of work</p><p id="speed-note" class="caption muted" role="status"></p></div></div>
+      <div id="on-behalf" hidden><label for="requester">Client team member</label><select id="requester"></select></div>
+      <div class="form-actions"><button class="action" type="submit">Submit request</button><p class="caption muted">Reserved on submission. Charged on acceptance.</p></div>
+    </form>
+    <p id="request-status" class="status" role="status"></p>
+    <details class="level-guide"><summary>Levels & pricing</summary><div class="table-scroll details-body"><table><caption class="sr-only">Thinking levels, work time, and credits by delivery speed</caption><thead><tr><th scope="col">Level</th><th scope="col">Time</th><th scope="col">Normal · 48h</th><th scope="col">Fast · 24h</th></tr></thead><tbody>{thinkingLevels.map((level) => <tr><td>{level.name}</td><td>{level.time}</td><td>{level.normal} credits · {formatPrice(level.normal * creditPriceCents)}</td><td>{level.fast === null ? '—' : `${level.fast} credits · ${formatPrice(level.fast * creditPriceCents)}`}</td></tr>)}</tbody></table></div><p class="caption muted">USD · Delivery starts on acceptance, during business hours. Availability confirmed before acceptance.</p></details>
+  </section>
+  <section class="section">
+    <div class="row section-title"><h2>Activity</h2><button class="plain-button" id="export" type="button">Export CSV</button></div>
+    <div class="table-scroll"><table><caption class="sr-only">Requests, attributed team members, and credit usage</caption><thead><tr><th scope="col">Request</th><th scope="col">Team member</th><th scope="col">Status</th><th scope="col">Credits</th><th scope="col">Action</th></tr></thead><tbody id="activity"></tbody></table></div>
+    <p id="activity-status" class="status" role="status"></p>
+  </section>
+  <details class="section" id="team-section"><summary>Team & access</summary><div class="details-body">
+    <div class="table-scroll"><table><caption class="sr-only">Account members and usage</caption><thead><tr><th scope="col">Email</th><th scope="col">Role</th><th scope="col">Used</th><th scope="col">Held</th><th scope="col">Access</th></tr></thead><tbody id="team"></tbody></table></div>
+    <form id="invite-form" class="stack"><div class="fields"><div><label for="email">Email</label><input type="email" id="email" name="email" required placeholder="name@company.com" maxlength="254" /></div><div><label for="member-role">Role</label><select id="member-role" name="role"><option value="member">Team member</option><option value="manager">Account manager</option></select></div></div><div><button class="action" type="submit">Add member</button></div></form>
+    <p id="team-status" class="status" role="status"></p>
+  </div></details>
+  <details class="section"><summary>Agent connection</summary><p class="details-body muted">MCP connection is not available in this preview.</p></details>
+  </div>
+  <div id="checkout-panel" hidden inert><CreditCheckout showBack={false} /></div>
+  </div>
+</ServiceLayout>
+
+<script>
+  import { createDemoAccount, submitRequest, transitionRequest, allowMember, revokeMember, totals, usage, quoteRequest } from '../services/credits.mjs';
+  import { setupServiceNavigation } from '../services/service-navigation';
+  const state = createDemoAccount();
+  const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+  let actor = state.members[0].id;
+  let pendingFiles: File[] = [];
+  const requestFiles = new Map<string, { name: string; url: string }[]>();
+  const formatSize = (size: number) => size < 1024 * 1024 ? `${Math.ceil(size / 1024)} KB` : `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  function renderAttachments() {
+    $('attachment-list').replaceChildren(...pendingFiles.map((file, index) => {
+      const li = document.createElement('li');
+      const name = document.createElement('span'); name.textContent = `${file.name} · ${formatSize(file.size)}`;
+      const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'plain-button'; remove.textContent = 'Remove'; remove.setAttribute('aria-label', `Remove ${file.name}`);
+      remove.addEventListener('click', () => { pendingFiles.splice(index, 1); renderAttachments(); $('attachment-status').textContent = `${file.name} removed.`; });
+      li.append(name, remove); return li;
+    }));
+  }
+  $('attachments').addEventListener('change', () => {
+    const input = $<HTMLInputElement>('attachments');
+    const files = Array.from(input.files ?? []);
+    const errors: string[] = [];
+    for (const file of files) {
+      if (file.size > 20 * 1024 * 1024) { errors.push(`${file.name} exceeds 20 MB.`); continue; }
+      if (pendingFiles.some((selected) => selected.name === file.name && selected.size === file.size && selected.lastModified === file.lastModified)) continue;
+      if (pendingFiles.length >= 5) { errors.push('You can attach up to 5 files.'); break; }
+      pendingFiles.push(file);
+    }
+    input.value = '';
+    renderAttachments();
+    $('attachment-status').textContent = errors.length ? errors.join(' ') : `${pendingFiles.length} file${pendingFiles.length === 1 ? '' : 's'} attached.`;
+  });
+  function updateQuote() {
+    const normalCredits = Number($<HTMLSelectElement>('credits').value);
+    const speed = $<HTMLInputElement>('speed-fast');
+    speed.disabled = normalCredits >= 16;
+    const reset = speed.disabled && speed.checked;
+    if (reset) { speed.checked = false; $<HTMLInputElement>('speed-normal').checked = true; }
+    const quote = quoteRequest(normalCredits, speed.checked ? 'fast' : 'normal');
+    $('level-cost').textContent = `${quote.credits} credits · ${quote.time} of work`;
+    $('speed-note').textContent = speed.disabled ? (reset ? 'Switched to Normal. Fast is unavailable for this level.' : 'Fast is unavailable for this level.') : '';
+  }
+  $('credits').addEventListener('change', updateQuote);
+  $('speed-normal').addEventListener('change', updateQuote);
+  $('speed-fast').addEventListener('change', updateQuote);
+  const releaseFiles = () => { for (const files of requestFiles.values()) for (const file of files) URL.revokeObjectURL(file.url); };
+  window.addEventListener('pagehide', (event) => { if (!event.persisted) releaseFiles(); });
+  if (import.meta.hot) import.meta.hot.dispose(releaseFiles);
+  const holdExplanation = document.querySelector<HTMLDetailsElement>('.balance-hold')!;
+  document.addEventListener('click', (event) => {
+    if (event.target instanceof Node && !holdExplanation.contains(event.target)) holdExplanation.open = false;
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && holdExplanation.open) {
+      holdExplanation.open = false;
+      $('held').focus();
+    }
+  });
+  const role = () => $<HTMLSelectElement>('preview-role').value;
+  const navigation = setupServiceNavigation(() => role() === 'manager');
+  const cell = (text: string, wrap = false) => { const td = document.createElement('td'); td.textContent = text; if (wrap) td.className = 'wrap'; return td; };
+  const notify = (id: string, task: () => string) => { try { $(id).textContent = task(); render(); } catch (error) { $(id).textContent = error instanceof Error ? error.message : 'Unable to make that change.'; } };
+  function render() {
+    const balance = totals(state);
+    $('available').textContent = String(balance.available);
+    $('held').textContent = balance.reserved ? `${balance.reserved} credits held for pending requests` : 'No credits held';
+    $('purchase').hidden = role() !== 'manager';
+    $('manager-note').hidden = role() !== 'member';
+    $('on-behalf').hidden = role() !== 'studio';
+    $('invite-form').hidden = role() !== 'studio';
+    $('team-section').hidden = role() === 'member';
+    const person = state.members.find((member) => member.id === actor)!;
+    $('identity').textContent = person.email;
+    const requester = $<HTMLSelectElement>('requester');
+    const previous = requester.value;
+    requester.replaceChildren(...state.members.filter((member) => member.active && member.role !== 'studio').map((member) => new Option(member.email, member.id)));
+    if (Array.from(requester.options).some((option) => option.value === previous)) requester.value = previous;
+    $('activity').replaceChildren(...state.requests.map((request) => {
+      const tr = document.createElement('tr');
+      const member = state.members.find((member) => member.id === request.memberId)!;
+      const briefCell = cell(request.brief, true);
+      const service = document.createElement('div'); service.className = 'caption muted';
+      service.textContent = `${request.level} · ${request.speed === 'fast' ? 'Fast' : 'Normal'} · ${request.deliveryHours}h`;
+      briefCell.append(service);
+      const files = requestFiles.get(request.id) ?? [];
+      for (const file of files) {
+        const line = document.createElement('div'); line.className = 'caption';
+        const link = document.createElement('a'); link.href = file.url; link.download = file.name; link.textContent = file.name; link.title = `Download ${file.name}`;
+        line.append(link); briefCell.append(line);
+      }
+      const statusNames: Record<string, string> = { reserved: 'Pending', accepted: 'In progress', completed: 'Completed', declined: 'Declined', cancelled: 'Cancelled' };
+      const statusCell = cell('');
+      const statusLabel = document.createElement('span');
+      statusLabel.className = 'task-status';
+      statusLabel.textContent = statusNames[request.status] ?? request.status;
+      statusCell.append(statusLabel);
+      tr.classList.toggle('task-completed', request.status === 'completed');
+      tr.append(briefCell, cell(member.email), statusCell, cell(String(request.credits)));
+      const actions = cell('');
+      const addAction = (label: string, next: string) => {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'plain-button'; button.textContent = label;
+        button.addEventListener('click', () => notify('activity-status', () => { transitionRequest(state, actor, request.id, next); return `${request.brief}: ${next}. Sample balance updated.`; }));
+        actions.append(button, document.createTextNode(' '));
+      };
+      if (request.status === 'reserved') {
+        if (role() === 'studio') { addAction('Accept', 'accepted'); addAction('Decline', 'declined'); }
+        else if (role() === 'manager' || request.memberId === actor) addAction('Cancel', 'cancelled');
+      } else if (request.status === 'accepted' && role() === 'studio') addAction('Complete', 'completed');
+      const invoice = document.createElement('button');
+      invoice.type = 'button'; invoice.className = 'plain-button'; invoice.textContent = 'Invoice';
+      invoice.setAttribute('aria-label', `Download invoice for ${request.brief}`);
+      invoice.addEventListener('click', async () => {
+        invoice.disabled = true; invoice.textContent = 'Creating…';
+        try {
+          const { downloadTaskInvoice } = await import('../services/invoice.mjs');
+          await downloadTaskInvoice(state, request.id);
+          $('activity-status').textContent = 'Sample invoice downloaded.';
+        } catch (error) {
+          $('activity-status').textContent = error instanceof Error ? error.message : 'Unable to create invoice. Please try again.';
+        } finally { invoice.disabled = false; invoice.textContent = 'Invoice'; }
+      });
+      actions.append(invoice);
+      tr.append(actions); return tr;
+    }));
+    $('team').replaceChildren(...state.members.filter((member) => member.role !== 'studio').map((member) => {
+      const tr = document.createElement('tr'); const count = usage(state, member.id);
+      tr.append(cell(member.email), cell(member.role === 'manager' ? 'Account manager' : 'Team member'), cell(String(count.used)), cell(String(count.reserved)));
+      const access = cell(member.active ? 'Allowed' : 'Revoked');
+      if (role() === 'studio' && member.active) {
+        const button = document.createElement('button'); button.type = 'button'; button.className = 'plain-button'; button.textContent = 'Revoke';
+        button.addEventListener('click', () => notify('team-status', () => { revokeMember(state, actor, member.id); return `${member.email} removed from sample access. History retained.`; }));
+        access.replaceChildren(button);
+      }
+      tr.append(access); return tr;
+    }));
+  }
+  $('preview-role').addEventListener('change', () => { actor = role() === 'studio' ? 'studio' : role() === 'manager' ? 'alex' : 'sam'; if (role() !== 'manager') navigation.showRequests(); for (const id of ['request-status', 'activity-status', 'team-status']) $(id).textContent = ''; render(); });
+  $('request-form').addEventListener('submit', (event) => { event.preventDefault(); notify('request-status', () => {
+    const brief = $<HTMLTextAreaElement>('brief');
+    const request = submitRequest(state, actor, role() === 'studio' ? $<HTMLSelectElement>('requester').value : actor, brief.value, Number($<HTMLSelectElement>('credits').value), $<HTMLInputElement>('speed-fast').checked ? 'fast' : 'normal');
+    requestFiles.set(request.id, pendingFiles.map((file) => ({ name: file.name, url: URL.createObjectURL(file) })));
+    pendingFiles = []; renderAttachments(); $('attachment-status').textContent = '';
+    brief.value = ''; return 'Sample request added. Credits held; nothing sent to Windward.';
+  }); });
+  $('invite-form').addEventListener('submit', (event) => { event.preventDefault(); notify('team-status', () => {
+    const email = $<HTMLInputElement>('email'); allowMember(state, actor, email.value, $<HTMLSelectElement>('member-role').value); email.value = ''; return 'Sample access added. No invitation email sent.';
+  }); });
+  $('export').addEventListener('click', () => {
+    const csvCell = (value: unknown) => { let text = String(value); if (/^[\s]*[=+@-]/.test(text)) text = "'" + text; return '"' + text.replaceAll('"', '""') + '"'; };
+    const rows = [['Request ID', 'Request', 'Team member', 'Credits', 'Thinking Level', 'Delivery', 'Delivery hours', 'Status', 'Event', 'Performed by', 'Time'], ...state.events.map((event) => {
+      const request = state.requests.find((request) => request.id === event.requestId);
+      return [event.requestId ?? '', request?.brief ?? '', state.members.find((member) => member.id === request?.memberId)?.email ?? '', request?.credits ?? '', request?.level ?? '', request?.speed ?? '', request?.deliveryHours ?? '', request?.status ?? '', event.action, state.members.find((member) => member.id === event.actorId)?.email ?? '', event.at];
+    })];
+    const url = URL.createObjectURL(new Blob([rows.map((row) => row.map(csvCell).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8;' }));
+    const link = document.createElement('a'); link.href = url; link.download = 'windward-sample-activity.csv'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  render();
+</script>
+
+<style>
+  #account-content { position: relative; }
+  #requests-panel, #checkout-panel { display: flow-root; width: 100%; }
+  #requests-title:focus, :global(#checkout-title:focus) { outline: none; }
+  .preview-role { display: flex; align-items: center; gap: 12px; }
+  .preview-role label { margin: 0; white-space: nowrap; }
+  .preview-role select { width: auto; }
+  .account { display: flex; align-items: flex-start; justify-content: space-between; gap: 32px; }
+  #identity { margin-top: 8px; }
+  .balance { width: 320px; max-width: 100%; flex-shrink: 0; }
+  .balance-hold { position: relative; margin-top: 8px; }
+  .balance-hold summary { font-weight: 400; }
+  .balance-hold p { position: absolute; top: calc(100% + 8px); right: 0; width: 100%; padding: 16px; border: 1px solid #dedede; border-radius: 4px; background: #fff; color: #525252; box-shadow: 0 4px 16px rgb(0 0 0 / .08); z-index: 10; }
+  #level-cost, #speed-note:not(:empty) { margin-top: 8px; }
+  .delivery-field { margin: 24px 0 0; padding: 0; border: 0; min-width: 0; }
+  .delivery-field legend { padding: 0; margin-bottom: 8px; font-weight: 600; line-height: 24px; }
+  .delivery-tabs { display: flex; gap: 4px; height: 40px; padding: 4px; border-radius: 4px; background: #ededed; }
+  .delivery-tabs label { position: relative; flex: 1; margin: 0; min-width: 0; cursor: pointer; font-weight: 400; }
+  .delivery-tabs input { position: absolute; opacity: 0; width: 1px; height: 1px; padding: 0; margin: 0; }
+  .delivery-tabs span { display: flex; align-items: center; justify-content: center; height: 32px; padding: 4px 8px; border-radius: 4px; white-space: nowrap; font-size: var(--type-caption); line-height: 20px; color: #737373; }
+  .delivery-tabs input:checked + span { background: #fff; color: #171717; box-shadow: 0 1px 2px rgb(0 0 0 / .08); }
+  .delivery-tabs input:focus-visible + span { outline: 2px solid #737373; outline-offset: 4px; }
+  .delivery-tabs input:disabled + span { color: #999; cursor: not-allowed; }
+  .level-guide { margin-top: 24px; }
+  /* Controls (136px), then the quote's 8px gap and 20px caption line. */
+  #brief { height: 164px; min-height: 164px; }
+  .attachments { margin-top: 16px; }
+  #attachment-note { margin-top: 8px; }
+  #attachments { height: auto; font-size: var(--type-caption); padding: 8px; }
+  #attachments::file-selector-button { font: inherit; border: 1px solid #d4d4d4; border-radius: 4px; background: #fafafa; padding: 4px 8px; margin-right: 12px; cursor: pointer; }
+  #attachment-list { list-style: none; padding: 0; margin: 0; }
+  #attachment-list:not(:empty) { margin-top: 12px; }
+  #attachment-list :global(li) { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 0 0 8px; font-size: var(--type-caption); }
+  #attachment-list :global(span) { min-width: 0; overflow-wrap: anywhere; }
+  #attachment-list :global(button) { min-height: 32px; padding: 4px 8px; font-size: var(--type-caption); }
+  .balance-total { font-size: var(--type-header); line-height: 28px; letter-spacing: -.02em; }
+  .balance strong { font-weight: 600; }
+  #purchase, #manager-note { margin-top: 16px; }
+  #invite-form { margin-top: 32px; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  @media (max-width: 640px) { .account { flex-direction: column; gap: 24px; } .preview-role { width: 100%; justify-content: space-between; } }
+</style>

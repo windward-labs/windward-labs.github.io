@@ -1,0 +1,34 @@
+---
+import { creditPacks, formatPrice } from '../services/pricing.mjs';
+interface Props { showBack?: boolean }
+const { showBack = true } = Astro.props;
+---
+<section class="section credit-checkout" aria-labelledby="checkout-title">
+  <div class="row section-title">
+    <h2 id="checkout-title" tabindex="-1">Add credits</h2>
+    {showBack && <a href="/service/">Back to requests</a>}
+  </div>
+  <form class="stack checkout-form">
+    <div><label for="pack">Credit pack</label><select id="pack">{creditPacks.map((pack) => <option value={pack.credits} selected={pack.credits === 32}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></div>
+    <div class="row"><span>Credits</span><output id="pack-total" for="pack">32 credits</output></div>
+    <div class="row"><span>Total · USD</span><output id="pack-price" for="pack" aria-live="polite">{formatPrice(creditPacks[1].amountCents)}</output></div>
+    <p class="caption muted">$75 per credit · One-time purchase</p>
+    <p class="caption muted">Card or US bank account. Save payment details with Stripe for future top-ups.</p>
+    <div><button type="button" class="action" disabled aria-describedby="checkout-note">Continue to checkout</button></div>
+    <p class="caption muted" id="checkout-note">Checkout is not connected. No payment will be taken.</p>
+  </form>
+</section>
+
+<script>
+  import { creditPacks, formatPrice } from '../services/pricing.mjs';
+  const pack = document.querySelector<HTMLSelectElement>('#pack');
+  pack?.addEventListener('change', () => {
+    document.querySelector<HTMLOutputElement>('#pack-total')!.value = `${pack.value} credits`;
+    const selected = creditPacks.find((item) => item.credits === Number(pack.value));
+    if (selected) document.querySelector<HTMLOutputElement>('#pack-price')!.value = formatPrice(selected.amountCents);
+  });
+</script>
+
+<style>
+  .checkout-form { max-width: 560px; }
+</style>
