@@ -105,13 +105,14 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
       <span>Windward Labs</span>
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
     </button>
-    {open && <div id="portal-account-popover" className="portal-account-popover"><div className="portal-account-info"><p className="caption muted">Signed in as</p><p>{email}</p></div><a className="portal-menu-link" href="/">Windward Labs website</a><button ref={signOut} type="button" className="portal-sign-out" onClick={()=>{ setOpen(false); onSignOut(); }}>Sign out</button></div>}
+    {open && <div id="portal-account-popover" className="portal-account-popover"><div className="portal-account-info"><p className="caption muted">Signed in as</p><p>{email}</p></div><button ref={signOut} type="button" className="portal-sign-out" onClick={()=>{ setOpen(false); onSignOut(); }}>Sign out</button></div>}
   </div>;
 }
 
 function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{actor:Actor; client:ClientDetail; api:Api; setClient:(client:ClientDetail)=>void; checkoutOnly:boolean; paymentReturn:boolean}) {
-  const [checkout,setCheckout] = useState(checkoutOnly);
+  const checkout = checkoutOnly;
   const [copyStatus,setCopyStatus] = useState('');
+  const creditActionTarget = document.getElementById('service-credit-action');
   const [showWorkForm,setShowWorkForm] = useState(false);
   const [workHours,setWorkHours] = useState('');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
@@ -123,8 +124,10 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
   return <>
-    {actor.staff && <div className="portal-back"><a href="/service/">&lt; All clients</a></div>}
-    <section className="section stack">
+    {creditActionTarget && !checkoutOnly && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,creditActionTarget)}
+    {actor.staff && !checkoutOnly && <div className="portal-back"><a href="/service/">&lt; All clients</a></div>}
+    {checkoutOnly && <div className="portal-back"><a href={clientUrl(client.id)}>&lt; Back to account</a></div>}
+    <section className="section stack" hidden={checkoutOnly}>
       <div className="row portal-client-header">
         <div>
           <div className="portal-client-heading">
@@ -137,10 +140,8 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         <div className="portal-balance">
           {(client.balance>0 || !creditsOwed(client)) && <div><strong>{Math.max(0,client.balance)}</strong><span> credits available</span></div>}
           {creditsOwed(client)>0 && <><div><strong>{creditsOwed(client)}</strong><span> credits owed</span></div><p className="caption muted">{formatPrice(creditsOwed(client)*creditPriceCents)} outstanding · $75 per credit</p><p className="caption muted">{Math.max(0,-client.balance)} unbilled · {client.invoiced_credits || 0} on unpaid invoices</p></>}
-          {!checkoutOnly && <button type="button" className="plain-button" onClick={()=>setCheckout(value=>!value)} aria-expanded={checkout} aria-controls="portal-credit-checkout">Add credits</button>}
         </div>
       </div>
-      {checkoutOnly && <div className="portal-actions"><a href={clientUrl(client.id)}>Back to account</a></div>}
       {copyStatus && <p className="caption" role="status">{copyStatus}</p>}
     </section>
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
@@ -170,7 +171,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
         <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
       </MutationForm></div>}
-        {!activeProjects.length ? <div className="portal-empty-state"><span className="portal-empty-icon" aria-hidden="true">＋</span><h3>No active projects yet</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
+        {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
       </section>
       <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
@@ -366,7 +367,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
   url?.searchParams.set('utm_content',clientId);
   url?.searchParams.set('prefilled_email',email);
   return <section id="portal-credit-checkout" className="section stack portal-checkout">
-    <h2>Add credits</h2>
+    <div className="row"><h2>Add credits</h2><span className="caption muted">{client.name}</span></div>
     {testMode && <p role="status">Stripe test mode · No real money is charged. Credits are recorded in the local database.</p>}
     <p className="muted">1 credit is 15 minutes of work at normal delivery.</p>
     <div className="portal-checkout-layout">
@@ -377,9 +378,8 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
           <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 16 | 32 | 64)}/>
           <span className="portal-pack-content">
             <span className="row portal-pack-heading"><span>{option.name}</span><span>{formatPrice(option.amountCents)}</span></span>
-            <span className="muted">{option.credits} credits · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
+            <span className="muted">{option.credits} credits · {option.hours} hours · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
             <span className="muted">{option.description}</span>
-            <span className="caption muted">{option.hours} hours at normal delivery</span>
             {lastPurchase?.credits===option.credits && <span className="portal-pack-badge caption">You bought this last time</span>}
           </span>
         </label>;
