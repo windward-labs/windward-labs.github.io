@@ -6,6 +6,10 @@ stores clients, approved email addresses, work, progress updates, and credits.
 The public pages contain only the application shell; client records are never
 embedded in generated HTML.
 
+Persistent agents can use individually hashed, expiring and revocable bearer
+keys. See [James's API integration guide](AGENT_API.md) for provisioning, project
+updates, attachments, email reference deduplication and billing routes.
+
 ## Local setup
 
 1. In Privy, enable email login and allow `http://localhost:4321` and

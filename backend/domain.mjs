@@ -29,6 +29,6 @@ export function statusInput(body) {
   return { id: id(body.id), status: body.status, note: text(body.note,'Progress note') };
 }
 export function isStaffEmail(email) {
-  // Called only with the email fetched from Privy on the server.
+  // Called with a server-verified Privy email or a provisioned agent identity.
   return normalizeEmail(email).split('@')[1] === 'windwardlabs.xyz';
 }

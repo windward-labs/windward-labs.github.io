@@ -1,4 +1,5 @@
 import { PrivyClient } from '@privy-io/node';
+import {authenticateAgent} from './agent-auth.mjs';
 import { PortalError, normalizeEmail, isStaffEmail } from './domain.mjs';
 
 let cached;
@@ -10,8 +11,9 @@ export function actorFromPrivyUser(user) {
   return { id:user.id, email, staff:isStaffEmail(email) };
 }
 export async function authenticate(request,env) {
-  if (!env.PRIVY_APP_ID || !env.PRIVY_APP_SECRET) throw new PortalError(503,'Portal sign-in is not configured yet.');
   const token = request.headers.get('Authorization')?.match(/^Bearer (\S+)$/)?.[1];
+  if(token?.startsWith('wwa_'))return authenticateAgent(token,env);
+  if (!env.PRIVY_APP_ID || !env.PRIVY_APP_SECRET) throw new PortalError(503,'Portal sign-in is not configured yet.');
   if (!token) throw new PortalError(401,'Sign in to access this account.');
   if (!cached || cached.id !== env.PRIVY_APP_ID || cached.secret !== env.PRIVY_APP_SECRET) cached={id:env.PRIVY_APP_ID,secret:env.PRIVY_APP_SECRET,client:new PrivyClient({appId:env.PRIVY_APP_ID,appSecret:env.PRIVY_APP_SECRET})};
   let claims;

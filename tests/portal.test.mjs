@@ -13,6 +13,8 @@ import { paymentDocument } from '../backend/payment-documents.mjs';
 import { PDFDocument } from 'pdf-lib';
 import { maxAttachmentBytes } from '../backend/attachments.mjs';
 import { billingPreview, issueInvoice, refreshInvoice, voidInvoice, fulfillInvoiceEvent } from '../backend/billing.mjs';
+import {randomBytes} from 'node:crypto';
+import {authenticateAgent,tokenHash,authorizeAgent} from '../backend/agent-auth.mjs';
 
 const staff = {id:'did:privy:staff',email:'phil@windwardlabs.xyz',staff:true};
 const contact = {id:'did:privy:client',email:'alex@example.com',staff:false};
@@ -25,6 +27,7 @@ function fixture(extraEnv = {}) {
   sqlite.exec(readFileSync(new URL('../backend/migrations/0003_overage_billing.sql',import.meta.url),'utf8'));
   sqlite.exec('COMMIT');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0004_progress_attachments.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0005_agents.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -64,6 +67,78 @@ function attachmentStorage() {
   const objects = new Map();
   return {objects,async put(key,bytes) { objects.set(key,bytes.slice()); },async get(key) { const bytes=objects.get(key); return bytes ? {body:bytes} : null; }};
 }
+
+async function agentKey(f,scopes=['admin'],expiresAt=null) {
+  const keyId=randomBytes(16).toString('hex'),token=`wwa_${keyId}_${randomBytes(32).toString('base64url')}`;
+  f.sqlite.prepare('INSERT INTO agent_keys (id,email,label,token_hash,scopes,expires_at) VALUES (?,?,?,?,?,?)').run(keyId,'james@windwardlabs.xyz','James',await tokenHash(token),JSON.stringify(scopes),expiresAt);
+  return {keyId,token,actor:await authenticateAgent(token,{DB:f.DB})};
+}
+test('agent bearer credentials are hashed, expire, revoke immediately, and do not require a Privy session',async()=>{
+  const f=fixture(),key=await agentKey(f);
+  const request=token=>new Request('https://api.example.com/v1/me',{headers:{Authorization:`Bearer ${token}`}});
+  assert.equal((await authenticate(request(key.token),{DB:f.DB})).email,'james@windwardlabs.xyz');
+  assert.notEqual(f.sqlite.prepare('SELECT token_hash FROM agent_keys').get().token_hash,key.token);
+  await assert.rejects(authenticateAgent(key.token.slice(0,-1)+(key.token.endsWith('A')?'B':'A'),{DB:f.DB}),error=>error.status===401);
+  await assert.rejects(authenticateAgent('wwa_invalid',{DB:f.DB}),error=>error.status===401);
+  f.sqlite.prepare('UPDATE agent_keys SET expires_at=? WHERE id=?').run('2000-01-01T00:00:00Z',key.keyId);
+  await assert.rejects(authenticateAgent(key.token,{DB:f.DB}),error=>error.status===401);
+  f.sqlite.prepare('UPDATE agent_keys SET expires_at=NULL,revoked_at=? WHERE id=?').run('2026-01-01',key.keyId);
+  await assert.rejects(authenticateAgent(key.token,{DB:f.DB}),error=>error.status===401);
+  f.sqlite.prepare('UPDATE agent_keys SET revoked_at=NULL,email=? WHERE id=?').run('james@windwardlabs.xyz.attacker.com',key.keyId);
+  await assert.rejects(authenticateAgent(key.token,{DB:f.DB}),error=>error.status===403);
+});
+test('James admin creates credit-deducting projects and drafts bills with immutable attribution and a write audit',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work(24);
+  f.at('2025-01-15T12:00:00.000Z');await f.fund(clientId);
+  const path=`/clients/${clientId}/tasks`;
+  const result=await f.call(key.actor,path,'POST',{...task,actor_email:staff.email,created_by:staff.id});
+  assert.equal(result.status,200);assert.equal(result.data.balance,-8);
+  assert.equal(result.data.tasks[0].actor_email,'james@windwardlabs.xyz');
+  assert.equal(result.data.tasks[0].created_by,`agent:${key.keyId}`);
+  assert.equal((await f.call(key.actor,path,'POST',task)).data.balance,-8);
+  f.at('2025-02-05T12:00:00.000Z');
+  const preview=await f.call(key.actor,`/clients/${clientId}/billing?period=2025-01`);
+  assert.equal(preview.data.credits,8);
+  const draft={id:crypto.randomUUID(),period:'2025-01',email:contact.email,credits:8};
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/invoices`,'POST',draft)).status,200);
+  assert.equal(f.sqlite.prepare('SELECT actor_email FROM invoices').get().actor_email,key.actor.email);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/members`,'POST',{email:'new@example.com'})).status,200);
+  assert.equal(f.sqlite.prepare('SELECT COUNT(*) AS n FROM agent_activity WHERE response_status=200').get().n,4);
+  assert.doesNotThrow(()=>authorizeAgent(key.actor,`/v1/clients/${clientId}/invoices/${draft.id}/issue`,'POST'));
+});
+test('limited agent keys cannot escalate into billing issue, purchases, client creation, or cancellation',async()=>{
+  const f=fixture(),key=await agentKey(f,['clients:read','projects:update','billing:draft']),clientId=await f.client(),task=f.work();
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  for(const path of ['/clients',`/clients/${clientId}/purchases`,`/clients/${clientId}/members`,`/clients/${clientId}/tasks`,`/clients/${clientId}/invoices/${crypto.randomUUID()}/issue`])assert.equal((await f.call(key.actor,path,'POST',{})).status,403);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}`,'PATCH',{id:crypto.randomUUID(),status:'cancelled',note:'Cancel'})).status,403);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}`)).status,200);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',{id:crypto.randomUUID(),note:'Ready for review'})).status,200);
+});
+test('email progress ingestion deduplicates retries, preserves later status and balance, and hides source references from clients',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/updates`;
+  const body={id:crypto.randomUUID(),note:'The first design is ready.',source:{type:'email',id:'message-123',url:'https://mail.google.com/mail/u/0/#inbox/message-123'}};
+  const first=await f.call(key.actor,path,'POST',body);assert.equal(first.status,200);
+  assert.equal(first.data.updates[0].actor_email,key.actor.email);
+  assert.equal(first.data.sourceReferences[0].external_id,'message-123');
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',{id:crypto.randomUUID(),status:'completed',note:'Approved'});
+  const retry=await f.call(key.actor,path,'POST',{...body,id:crypto.randomUUID()});
+  assert.equal(retry.status,200);assert.equal(retry.data.updates.length,2);assert.equal(retry.data.balance,-4);assert.equal(retry.data.tasks[0].status,'completed');
+  assert.equal((await f.call(key.actor,path,'POST',{...body,note:'Different content'})).status,409);
+  const visible=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(visible.sourceReferences,undefined);assert.equal(visible.updates.length,2);
+  assert.equal((await f.call(key.actor,path,'POST',{id:crypto.randomUUID(),note:'Unsafe link',source:{type:'email',id:'other',url:'http://unsafe.example'}})).status,400);
+  const otherId=await f.client();assert.equal((await f.call(key.actor,`/clients/${otherId}/tasks/${task.id}/updates`,'POST',body)).status,404);
+});
+test('agent attachment upload uses the existing private storage and records James attribution',async()=>{
+  const f=fixture({ATTACHMENTS:attachmentStorage()}),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const update={id:crypto.randomUUID(),note:'Review these screens.'};
+  await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',update);
+  assert.equal((await f.file(key.actor,clientId,task.id,crypto.randomUUID(),'POST','file bytes',{},update.id)).status,200);
+  assert.equal(f.sqlite.prepare('SELECT actor_email FROM attachments').get().actor_email,key.actor.email);
+});
 
 test('attachments require staff uploads and current client membership for private downloads',async()=>{
   const bucket=attachmentStorage(), f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), otherId=await f.client(), task=f.work(), attachmentId=crypto.randomUUID();

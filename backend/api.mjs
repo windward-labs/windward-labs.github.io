@@ -1,5 +1,6 @@
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
+import {authorizeAgent,requireAgentScope} from './agent-auth.mjs';
 import { paymentDocument } from './payment-documents.mjs';
 import { handleAttachment } from './attachments.mjs';
 import { invoicedCreditsSql, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
@@ -22,7 +23,7 @@ async function clientAccess(db, actor, clientId) {
 async function detail(db, actor, clientId) {
   // Read authorization and data in a single primary database session.
   const client = await clientAccess(db,actor,clientId);
-  const [members,tasks,updates,ledger,attachments,invoices,balances] = await db.batch([
+  const [members,tasks,updates,ledger,attachments,invoices,balances,sources] = await db.batch([
     query(db,'SELECT email FROM client_members WHERE client_id = ? ORDER BY email',clientId),
     query(db,'SELECT * FROM tasks WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
     query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY u.created_at DESC, u.id',clientId),
@@ -30,17 +31,68 @@ async function detail(db, actor, clientId) {
     query(db,'SELECT a.id,a.task_id,a.update_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
     query(db,`SELECT id,period,email,credits,amount_cents,status,hosted_invoice_url,number,created_at FROM invoices WHERE client_id=? ${actor.staff ? '' : 'AND stripe_invoice_id IS NOT NULL'} ORDER BY created_at DESC,id`,clientId),
     query(db,`SELECT c.balance,${invoicedCreditsSql} AS invoiced_credits FROM clients c WHERE c.id=?`,clientId),
+    query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results };
+  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,...(actor.staff ? {sourceReferences:sources.results} : {}) };
 }
 
-// authenticate is dependency-injected in tests; production always uses Privy.
+async function addProjectUpdate(db,actor,clientId,taskId,body) {
+  const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
+  if(!task)throw new PortalError(404,'Work not found.');
+  const update=statusInput({...body,status:body.status ?? task.status});
+  if(update.status==='cancelled')requireAgentScope(actor,'projects:cancel');
+  let source=null;
+  if(body.source!==undefined) {
+    if(!body.source || !['email','text','meeting','other'].includes(body.source.type))throw new PortalError(400,'Choose a valid source type.');
+    source={type:body.source.type,id:text(body.source.id,'External message ID',500),url:null};
+    if(body.source.url!==undefined) {
+      source.url=text(body.source.url,'Source URL',2000);
+      let url;try{url=new URL(source.url);}catch{throw new PortalError(400,'Use an HTTPS source URL.');}
+      if(url.protocol!=='https:' || url.username || url.password)throw new PortalError(400,'Use an HTTPS source URL.');
+    }
+  }
+  let existing=await query(db,'SELECT * FROM task_updates WHERE id=?',update.id).first();
+  if(!existing && source)existing=await query(db,'SELECT u.* FROM task_updates u JOIN update_sources s ON s.update_id=u.id WHERE s.task_id=? AND s.source_type=? AND s.external_id=?',taskId,source.type,source.id).first();
+  if(existing) {
+    const savedSource=await query(db,'SELECT * FROM update_sources WHERE update_id=?',existing.id).first();
+    if(existing.task_id!==taskId || existing.note!==update.note || (body.status!==undefined && existing.status!==update.status) || (source ? savedSource?.source_type!==source.type || savedSource?.external_id!==source.id || savedSource?.source_url!==source.url : !!savedSource))throw new PortalError(409,'Update ID or message reference already used.');
+    return;
+  }
+  if(task.status==='cancelled')throw new PortalError(409,'Cancelled work cannot be changed.');
+  const statements=[
+    query(db,`INSERT INTO task_updates (id,task_id,status,note,created_by,actor_email) SELECT ?,id,?,?,?,? FROM tasks WHERE id=? AND client_id=? AND status!='cancelled'`,update.id,update.status,update.note,actor.id,actor.email,taskId,clientId),
+    query(db,`UPDATE tasks SET status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=?,updated_actor_email=? WHERE id=? AND client_id=? AND status!='cancelled'`,update.status,actor.id,actor.email,taskId,clientId),
+  ];
+  if(source)statements.push(query(db,`INSERT INTO update_sources (update_id,task_id,source_type,external_id,source_url) SELECT id,task_id,?,?,? FROM task_updates WHERE id=? AND task_id=?`,source.type,source.id,source.url,update.id,taskId));
+  await db.batch(statements);
+  if(!await query(db,'SELECT 1 FROM task_updates WHERE id=?',update.id).first())throw new PortalError(409,'Work changed. Refresh and try again.');
+}
+
+// authenticate is dependency-injected in tests; production verifies Privy or agent keys.
 export async function handleApi(request, env, authenticate) {
+  let auditId;
+  const response=await handleAuthorizedApi(request,env,async(request,env)=>{
+    const actor=await authenticate(request,env);
+    if(actor.kind==='agent' && !['GET','HEAD','OPTIONS'].includes(request.method)) {
+      auditId=crypto.randomUUID();
+      await query(env.DB,`INSERT INTO agent_activity (id,key_id,actor_email,method,path) VALUES (?,?,?,?,?)`,auditId,actor.keyId,actor.email,request.method,new URL(request.url).pathname).run();
+    }
+    return actor;
+  });
+  if(auditId) {
+    try{await query(env.DB,'UPDATE agent_activity SET response_status=? WHERE id=?',response.status,auditId).run();}
+    catch{console.error('Unable to finalize agent activity log',auditId);}
+  }
+  return response;
+}
+
+async function handleAuthorizedApi(request, env, authenticate) {
   try {
     const actor = await authenticate(request,env);
     const db = env.DB.withSession ? env.DB.withSession('first-primary') : env.DB;
     const path = new URL(request.url).pathname.replace(/\/$/,'');
     const method = request.method;
+    authorizeAgent(actor,path,method);
     if (path === '/v1/me' && method === 'GET') return json({...actor,automaticPayments:
       ['test','live'].includes(env.STRIPE_MODE) && !!env.STRIPE_SECRET_KEY?.startsWith(env.STRIPE_MODE==='live' ? 'sk_live_' : 'sk_test_')});
     if (path === '/v1/clients' && method === 'GET') {
@@ -61,6 +113,14 @@ export async function handleApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const updateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates$/);
+    if(updateRoute) {
+      if(method!=='POST')throw new PortalError(405,'Method not allowed.');
+      requireStaff(actor);
+      const clientId=id(updateRoute[1]);await clientAccess(db,actor,clientId);
+      await addProjectUpdate(db,actor,clientId,id(updateRoute[2]),await bodyOf(request));
+      return json(await detail(db,actor,clientId));
     }
     const documentRoute=path.match(/^\/v1\/clients\/([^/]+)\/activity\/([^/]+)\/document$/);
     if (documentRoute) {
@@ -130,22 +190,7 @@ export async function handleApi(request, env, authenticate) {
         if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy) throw new PortalError(409,'Work record ID already used.');
       } else await query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email) VALUES (?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email).run();
     } else if (resource === 'tasks' && method === 'PATCH' && taskId) {
-      id(taskId);
-      const update = statusInput(body);
-      const task = await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
-      if (!task) throw new PortalError(404,'Work not found.');
-      const existing = await query(db,'SELECT * FROM task_updates WHERE id=?',update.id).first();
-      if (existing) {
-        if (existing.task_id !== taskId || existing.note !== update.note || existing.status !== update.status) throw new PortalError(409,'Update ID already used.');
-      } else {
-        if (task.status === 'cancelled') throw new PortalError(409,'Cancelled work cannot be changed.');
-        // Guard against a cancellation racing with another status update.
-        await db.batch([
-          query(db,`INSERT INTO task_updates (id,task_id,status,note,created_by,actor_email) SELECT ?,id,?,?,?,? FROM tasks WHERE id=? AND client_id=? AND status!='cancelled'`,update.id,update.status,update.note,actor.id,actor.email,taskId,clientId),
-          query(db,`UPDATE tasks SET status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=?,updated_actor_email=? WHERE id=? AND client_id=? AND status!='cancelled'`,update.status,actor.id,actor.email,taskId,clientId),
-        ]);
-        if (!await query(db,'SELECT 1 FROM task_updates WHERE id=?',update.id).first()) throw new PortalError(409,'Work changed. Refresh and try again.');
-      }
+      await addProjectUpdate(db,actor,clientId,id(taskId),body);
     } else throw new PortalError(405,'Method not allowed.');
     return json(await detail(db,actor,clientId));
   } catch (error) {

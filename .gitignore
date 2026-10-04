@@ -16,3 +16,4 @@ npm-debug.log*
 .wrangler/
 .dev.vars*
 !.dev.vars.example
+.agent-secrets/
