@@ -369,7 +369,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
   return <section id="portal-credit-checkout" className="section stack portal-checkout">
     <div className="row"><h2>Add credits</h2><span className="caption muted">{client.name}</span></div>
     {testMode && <p role="status">Stripe test mode · No real money is charged. Credits are recorded in the local database.</p>}
-    <p className="muted">1 credit is 15 minutes of work at normal delivery.</p>
+    <p className="muted">Choose credits for design and engineering work.</p>
     <div className="portal-checkout-layout">
       <fieldset className="portal-pack-options"><legend className="portal-pack-legend">Choose a credit pack</legend>{[...creditPacks].reverse().map(option=>{
         const savings = option.credits * creditPriceCents - option.amountCents;
@@ -378,7 +378,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
           <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 16 | 32 | 64)}/>
           <span className="portal-pack-content">
             <span className="row portal-pack-heading"><span>{option.name}</span><span>{formatPrice(option.amountCents)}</span></span>
-            <span className="muted">{option.credits} credits · {option.hours} hours · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
+            <span className="muted">{option.credits} credits · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
             <span className="muted">{option.description}</span>
             {lastPurchase?.credits===option.credits && <span className="portal-pack-badge caption">You bought this last time</span>}
           </span>
