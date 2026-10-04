@@ -5,10 +5,11 @@ interface Props { title: string }
 const { title } = Astro.props;
 ---
 <BaseLayout title={`${title} — Windward Labs`}>
+  <meta slot="head" name="robots" content="noindex, nofollow" />
   <main class="workspace">
     <header class="masthead">
       <a href="/" class="wordmark">Windward Labs</a>
-      <a href="mailto:hi@windwardlabs.xyz" class="contact">Contact</a>
+      <nav id="service-session" aria-label="Account"></nav>
     </header>
     <slot />
     <footer class="workspace-footer"><span>© 2026 Windward Labs, Inc.</span></footer>

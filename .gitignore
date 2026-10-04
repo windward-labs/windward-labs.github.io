@@ -13,3 +13,6 @@ dist/
 .DS_Store
 *.pem
 npm-debug.log*
+.wrangler/
+.dev.vars*
+!.dev.vars.example
