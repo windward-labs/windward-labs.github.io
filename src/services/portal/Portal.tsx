@@ -322,7 +322,7 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
 }
 
 function TaskStatus({task}:{task:Task}) {
-  return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'muted'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
+  return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
 }
 function ProjectCreatedToast({clientId,success,onDismiss}:{clientId:string;success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
   const [hovered,setHovered]=useState(false);
