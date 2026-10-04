@@ -112,6 +112,7 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
 function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{actor:Actor; client:ClientDetail; api:Api; setClient:(client:ClientDetail)=>void; checkoutOnly:boolean; paymentReturn:boolean}) {
   const [checkout,setCheckout] = useState(checkoutOnly);
   const [copyStatus,setCopyStatus] = useState('');
+  const [showWorkForm,setShowWorkForm] = useState(false);
   const [workHours,setWorkHours] = useState('');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
   const [fileError,setFileError] = useState('');
@@ -143,10 +144,8 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
-      <section className="section"><div className="row section-title"><h2>Work & progress</h2><span className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</span></div>
-        {!client.tasks.length ? <p className="muted">No work recorded yet. Requests made through email, text, or other channels will appear here once the team records them.</p> : <div className="portal-tasks">{client.tasks.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} mutate={mutate} api={api} setClient={setClient}/>)}</div>}
-      </section>
-      {actor.staff && <section className="section"><h2 className="portal-heading">Record work</h2><MutationForm label="Submit" submit={async(form,id)=>{
+      <section className="section"><div className="row section-title"><h2>Work & progress</h2><div className="portal-actions"><span className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</span>{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>Record work</button>}</div></div>
+      {actor.staff && <div id="record-work-form" className="portal-work-form" hidden={!showWorkForm}><MutationForm label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
         if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500.');
@@ -165,12 +164,12 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
-        <div className="fields"><label>Hours of work<input name="hours" type="number" required min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)} aria-describedby="work-hours-rate work-credit-conversion"/></label><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
-        <p id="work-hours-rate" className="caption muted">1 hour = {normalCreditsPerHour} credits at normal delivery. Log time in 15-minute increments (0.25 hours).</p>
-        <p id="work-credit-conversion"><output aria-live="polite">{validWorkHours ? `${workHours} ${Number(workHours) === 1 ? 'hour' : 'hours'} = ${workCredits} ${workCredits === 1 ? 'credit' : 'credits'} to deduct` : workHours ? 'Enter time in 0.25-hour increments.' : 'Enter hours to see the credits to deduct.'}</output></p>
-        {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">This work adds {workCredits-Math.max(0,client.balance)} credits to the amount owed. You can still submit it; outstanding credits are billed after month-end.</p>}
-        <p className="caption muted">Deducted once when recorded. Progress updates do not deduct more credits. Cancelling work returns its credits.</p>
-      </MutationForm></section>}
+        <div className="fields"><div><span className="portal-field-label"><label htmlFor="work-hours">Hours of work</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" required min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
+        {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
+        <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
+      </MutationForm></div>}
+        {!client.tasks.length ? <p className="muted">No work recorded yet. Requests made through email, text, or other channels will appear here once the team records them.</p> : <div className="portal-tasks">{client.tasks.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} mutate={mutate} api={api} setClient={setClient}/>)}</div>}
+      </section>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
       <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
