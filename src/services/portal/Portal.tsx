@@ -58,7 +58,7 @@ function AuthenticatedPortal() {
     return () => { active=false; };
   },[ready,authenticated,user?.id,api,selectedId,revision]);
   if (!ready) return <p className="portal-loading" role="status">Loading sign-in…</p>;
-  if (!authenticated) return <section className="section stack"><h1>Client portal</h1><p>Sign in with your email to buy credits and follow your work with Windward.</p><div><button className="action" onClick={() => login({loginMethods:['email']})}>Sign in with email</button></div><p className="caption muted">Use the email address Windward approved for your client account.</p></section>;
+  if (!authenticated) return <section className="section stack"><h1>Client portal</h1><p>Sign in with your email to follow your work with Windward.</p><div><button className="action" onClick={() => login({loginMethods:['email']})}>Sign in with email</button></div><p className="caption muted">Use the email address Windward approved for your client account.</p></section>;
   const sessionTarget = document.getElementById('service-session');
   return <>
     {sessionTarget && createPortal(<AccountMenu email={actor?.email || user?.email?.address || 'Account'} onSignOut={() => { setActor(null); setClients([]); setClient(null); void logout(); }}/>,sessionTarget)}
