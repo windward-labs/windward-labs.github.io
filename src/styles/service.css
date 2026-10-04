@@ -131,7 +131,7 @@
 .portal-balance strong { font-size: 20px; }
 .portal-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; }
 .portal-overage-note { padding: 12px 16px; border: 1px solid #dedede; border-radius: 4px; background: #f5f5f5; }
-.portal-invoice { padding: 24px 0; border-top: 1px solid var(--color-border); }
+.portal-invoice { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px; border: 1px solid var(--color-border); border-radius: 4px; }
 .portal-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .portal-form { margin-top: 16px; }
 .portal-form label { margin-bottom: 0; }
@@ -248,3 +248,34 @@
 .workspace .portal-credit-table :is(th,td):nth-child(3) { text-align: right; }
 .portal-credit-table .portal-payment-document { margin-top: 0; }
 @media (max-width: 640px) { .portal-project-link { flex-wrap: wrap; } }
+
+.workspace .portal-project-dialog { width: min(680px, calc(100vw - 48px)); max-height: calc(100dvh - 48px); margin: auto; padding: 24px; border: 1px solid #dedede; border-radius: 8px; background: #fff; color: #171717; overflow: auto; }
+.portal-project-dialog::backdrop { background: rgb(0 0 0 / .35); }
+body:has(.portal-project-dialog[open]) { overflow: hidden; }
+.portal-project-success { display: grid; gap: 8px; margin-bottom: 24px; padding: 16px; border: 1px solid #bbf7d0; border-radius: 4px; background: #f0fdf4; color: #166534; }
+#active-projects { scroll-margin-top: 24px; }
+
+.portal-invoice-amount { font-size: 16px; }
+.portal-invoice-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.portal-invoice-controls > .action { text-decoration: none; }
+.portal-invoice-status { padding: 2px 8px; border-radius: 4px; background: #f5f5f5; color: #737373; }
+.portal-invoice-due { color: #92400e; background: #fffbeb; }
+.portal-invoice-status.portal-success { color: #166534; background: #f0fdf4; }
+.portal-invoice-menu { position: relative; }
+.workspace .portal-invoice-menu > summary { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 4px; list-style: none; font-size: 20px; }
+.portal-invoice-menu > summary::-webkit-details-marker { display: none; }
+.portal-invoice-menu > summary:hover { background: #f5f5f5; }
+.portal-invoice-popover { position: absolute; top: calc(100% + 8px); right: 0; z-index: 15; width: 264px; padding: 4px; border: 1px solid #dedede; border-radius: 4px; background: #fff; box-shadow: 0 4px 16px rgb(0 0 0 / .08); }
+.portal-invoice-info { padding: 8px 12px; border-bottom: 1px solid #dedede; overflow-wrap: anywhere; }
+.workspace .portal-invoice-popover > :is(button,a), .portal-invoice-popover .portal-payment-document button, .portal-invoice-cancel > summary { display: block; width: 100%; border: 0; padding: 8px 12px; background: transparent; text-align: left; text-decoration: none; font-size: 12px; font-weight: 400; }
+.workspace .portal-invoice-popover > :is(button,a):hover, .portal-invoice-popover .portal-payment-document button:hover { background: #f5f5f5; }
+.portal-invoice-popover .portal-payment-document { margin: 0; }
+.portal-invoice-cancel > summary { color: #b91c1c; }
+.portal-invoice-cancel > div { padding: 8px 12px; gap: 12px !important; }
+.portal-invoice-cancel button { padding: 8px; border: 1px solid #dedede; border-radius: 4px; background: #fff; color: #b91c1c; }
+.portal-invoice-error { grid-column: 1 / -1; }
+@media (max-width: 640px) { .portal-invoice { grid-template-columns: 1fr; } }
+
+.portal-invoice-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+
+@media (max-width: 640px) { .portal-invoice-controls { justify-content: flex-end; } }

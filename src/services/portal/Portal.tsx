@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
 import { creditPacks, creditPriceCents, formatPrice, normalCreditsPerHour } from '../pricing.mjs';
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
-import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment } from './types';
+import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice } from './types';
 
 const statusNames: Record<WorkStatus, string> = { queued: 'Queued', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const date = (value: string) => new Intl.DateTimeFormat('en-US', { month:'short', day:'numeric', year:'numeric' }).format(new Date(value));
+const monthName = (value:string) => new Intl.DateTimeFormat('en-US',{month:'long',year:'numeric',timeZone:'UTC'}).format(new Date(`${value}-01T00:00:00Z`));
 const clientUrl = (id: string) => `/service/client/?id=${encodeURIComponent(id)}`;
 const creditsOwed = (client:ClientSummary) => Math.max(0,-client.balance)+(client.invoiced_credits || 0);
 const previousMonth = () => { const now=new Date(); return new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth()-1,1)).toISOString().slice(0,7); };
@@ -115,6 +116,9 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const [copyStatus,setCopyStatus] = useState('');
   const creditActionTarget = document.getElementById('service-credit-action');
   const [showWorkForm,setShowWorkForm] = useState(false);
+  const [workSaving,setWorkSaving] = useState(false);
+  const [workFormRevision,setWorkFormRevision] = useState(0);
+  const [workSuccess,setWorkSuccess] = useState<{id:string;credits:number;balance:number}|null>(null);
   const [workHours,setWorkHours] = useState('');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
   const [fileError,setFileError] = useState('');
@@ -148,21 +152,25 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
-      <section className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>New Project</button>}</div></div>
-      {actor.staff && <div id="record-work-form" className="portal-work-form" hidden={!showWorkForm}><MutationForm label="Submit" submit={async(form,id)=>{
+      <section id="active-projects" className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="record-work-form" onClick={()=>{setWorkSuccess(null);setShowWorkForm(true);}}>New Project</button>}</div></div>
+      {workSuccess && <div className="portal-project-success" role="status"><strong>✓ Project created</strong><p>{workSuccess.credits} credits deducted · {Math.abs(workSuccess.balance)} credits {workSuccess.balance<0 ? 'owed' : 'available'}</p><a href={`/service/project/?client=${encodeURIComponent(client.id)}&project=${encodeURIComponent(workSuccess.id)}`}>View project</a></div>}
+      {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
         if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500.');
-        await mutate('tasks','POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits,status:form.get('status')});
+        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits,status:form.get('status')});
+        setClient(savedClient);
         try {
           for (const {id:attachmentId,file} of workFiles) await api(`/clients/${client.id}/tasks/${id}/attachments/${attachmentId}`,'POST',file);
         } catch (error) {
           setClient(await api<ClientDetail>(`/clients/${client.id}`));
           throw new Error(`Work was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Submit again to retry the attachments; credits will not be deducted again.`);
         }
-        if (workFiles.length) setClient(await api<ClientDetail>(`/clients/${client.id}`));
-        setWorkFiles([]);
-        setWorkHours('');
+        if (workFiles.length) {savedClient = await api<ClientDetail>(`/clients/${client.id}`);setClient(savedClient);}
+        setWorkFiles([]);setWorkHours('');
+        setWorkSuccess({id,credits,balance:savedClient.balance});
+        setShowWorkForm(false);setWorkFormRevision(value=>value+1);
+        requestAnimationFrame(()=>document.getElementById('active-projects')?.scrollIntoView({behavior:'smooth',block:'start'}));
       }}>
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
@@ -171,7 +179,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         <div className="fields"><div><span className="portal-field-label"><label htmlFor="work-hours">Hours of work</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" required min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
         <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
-      </MutationForm></div>}
+      </MutationForm></ProjectDialog>}
         {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
       </section>
       <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><a key={task.id} className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(client.id)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task}/><span aria-hidden="true">›</span></span></a>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
@@ -186,6 +194,16 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       </>}
     </>}
   </>;
+}
+
+function ProjectDialog({open,busy,onClose,children}:{open:boolean;busy:boolean;onClose:()=>void;children:ReactNode}) {
+  const dialog=useRef<HTMLDialogElement>(null);
+  useEffect(()=>{
+    const element=dialog.current;
+    if(open && element && !element.open)element.showModal();
+    else if(!open && element?.open)element.close();
+  },[open]);
+  return <dialog ref={dialog} id="record-work-form" className="portal-project-dialog" aria-labelledby="new-project-title" onCancel={event=>{event.preventDefault();if(!busy)onClose();}} onClose={onClose}><div className="row"><h2 id="new-project-title">New Project</h2><button type="button" className="portal-copy-button" aria-label="Close new project" disabled={busy} onClick={onClose}>×</button></div>{children}</dialog>;
 }
 
 function Billing({actor,client,api,setClient}:{actor:Actor;client:ClientDetail;api:Api;setClient:(client:ClientDetail)=>void}) {
@@ -217,27 +235,44 @@ function Billing({actor,client,api,setClient}:{actor:Actor;client:ClientDetail;a
   if (!actor.staff && !invoices.length) return null;
   return <section className="section stack"><h2>{actor.staff ? 'Month-end billing' : 'Invoices'}</h2>
     {actor.staff && <>
-      <p className="caption muted">Review outstanding credits after each month closes (UTC). Drafts don’t charge the client. Issued bills are due in 30 days; copy the payment link to share it.</p>
+      <p className="caption muted">Review a completed month and approve a bill for outstanding credits.</p>
       <label>Billing month<input type="month" value={period} max={previousMonth()} min="2020-01" onChange={event=>setPeriod(event.target.value)}/></label>
       {!preview && !error && <p role="status">Loading billing review…</p>}
-      {preview && <p role="status">{preview.credits ? `${preview.credits} unbilled credits through ${preview.period} · ${formatPrice(preview.amountCents)}` : `No unbilled credits remain through ${preview.period}.`}</p>}
+      {preview && <p role="status">{preview.credits ? `${preview.credits} unbilled credits · ${formatPrice(preview.amountCents)}` : `No unbilled credits for ${monthName(preview.period)}.`}</p>}
       {preview && preview.credits>0 && !invoices.some(invoice=>invoice.period===period && invoice.status!=='void') && <MutationForm key={period} label="Create draft" submit={async(form,id)=>{setClient(await api<ClientDetail>(`/clients/${client.id}/invoices`,'POST',{id,period,email:form.get('email'),credits:preview.credits}));}}>
         <label>Billing email<input name="email" type="email" required maxLength={254} defaultValue={client.members[0] || ''}/></label>
       </MutationForm>}
     </>}
-    {invoices.map(invoice=><div key={invoice.id} className="portal-invoice stack">
-      <div className="row"><h3>{invoice.number || invoice.period}</h3><span className="caption muted">{{draft:'Draft · Staff review',issuing:'Preparing invoice',open:'Payment due',paid:'Paid',void:'Voided'}[invoice.status]}</span></div>
-      <p>{invoice.credits} credits · {formatPrice(invoice.amount_cents)} · through {invoice.period}</p>
-      {actor.staff && <p className="caption muted">Billing email: {invoice.email}</p>}
-      <div className="portal-actions">
-        {actor.staff && (invoice.status==='draft' || invoice.status==='issuing') && <button className="plain-button" disabled={!!busy} onClick={()=>void action(invoice.id,'issue')}>{busy===invoice.id ? 'Preparing…' : invoice.status==='draft' ? 'Approve & issue invoice' : 'Retry issuing invoice'}</button>}
-        {invoice.status==='open' && invoice.hosted_invoice_url && <><a href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer">{actor.staff ? 'Open payment link' : 'Pay invoice'}</a>{actor.staff && <button className="plain-button" onClick={async()=>{try {await navigator.clipboard.writeText(invoice.hosted_invoice_url!);} catch {setError('Unable to copy. Open the payment link to share it.');}}}>Copy payment link</button>}</>}
-        {invoice.status==='open' && <button className="plain-button" disabled={!!busy} onClick={()=>void action(invoice.id,'refresh')}>{busy===invoice.id ? 'Checking…' : 'Refresh payment status'}</button>}
-        {actor.staff && (invoice.status==='draft' || invoice.status==='open') && <details><summary>{invoice.status==='draft' ? 'Cancel draft' : 'Void invoice'}</summary><div className="stack details-body"><p className="caption muted">{invoice.status==='draft' ? 'Cancel this draft so you can review an updated bill.' : 'This cancels the bill and returns its credits to the unbilled balance. It does not refund payments.'}</p><div><button className="plain-button" disabled={!!busy} onClick={()=>void action(invoice.id,'void')}>{busy===invoice.id ? 'Saving…' : 'Confirm cancellation'}</button></div></div></details>}
-      </div>
-    </div>)}
+    {invoices.map(invoice=><InvoiceCard key={invoice.id} invoice={invoice} clientId={client.id} staff={actor.staff} busy={!!busy} working={busy===invoice.id} api={api} action={operation=>void action(invoice.id,operation)}/>)}
     {error && <p role="alert">{error}</p>}
   </section>;
+}
+
+function InvoiceCard({invoice,clientId,staff,busy,working,api,action}:{invoice:BillingInvoice;clientId:string;staff:boolean;busy:boolean;working:boolean;api:Api;action:(operation:'issue'|'refresh'|'void')=>void}) {
+  const [copied,setCopied]=useState(false), [copyError,setCopyError]=useState(''), [menuOpen,setMenuOpen]=useState(false);
+  const menu=useRef<HTMLDetailsElement>(null);
+  useEffect(()=>{
+    if(!menuOpen)return;
+    const dismiss=(event:PointerEvent)=>{if(event.target instanceof Node && !menu.current?.contains(event.target) && menu.current)menu.current.open=false;};
+    const escape=(event:KeyboardEvent)=>{if(event.key==='Escape' && menu.current){menu.current.open=false;menu.current.querySelector('summary')?.focus();}};
+    document.addEventListener('pointerdown',dismiss);document.addEventListener('keydown',escape);
+    return ()=>{document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',escape);};
+  },[menuOpen]);
+  useEffect(()=>{if(!copied)return;const timer=setTimeout(()=>setCopied(false),4000);return ()=>clearTimeout(timer);},[copied]);
+  async function copyLink(){try{await navigator.clipboard.writeText(invoice.hosted_invoice_url!);setCopied(true);setCopyError('');}catch{setCopyError('Unable to copy. Open the invoice to share its link.');}}
+  return <div className="portal-invoice">
+    <div><div className="portal-invoice-title"><strong className="portal-invoice-amount">{formatPrice(invoice.amount_cents)}</strong><span className={`caption portal-invoice-status ${invoice.status==='paid' ? 'portal-success' : invoice.status==='open' ? 'portal-invoice-due' : ''}`}>{invoice.status==='paid' && '✓ '}{{draft:'Draft',issuing:'Preparing',open:'Payment due',paid:'Paid',void:'Voided'}[invoice.status]}</span></div><p className="caption muted">{invoice.credits} credits · {monthName(invoice.period)}</p></div>
+    <div className="portal-invoice-controls">
+      {staff && (invoice.status==='draft'||invoice.status==='issuing') && <button type="button" className="action" disabled={busy} onClick={()=>action('issue')}>{working ? 'Preparing…' : invoice.status==='draft' ? 'Approve & issue' : 'Retry issuing'}</button>}
+      {invoice.status==='open' && invoice.hosted_invoice_url && (staff ? <button type="button" className="action" onClick={()=>void copyLink()} aria-live="polite">{copied ? 'Copied ✓' : 'Copy payment link'}</button> : <a className="action" href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer">Pay invoice</a>)}
+      <details ref={menu} className="portal-invoice-menu" onToggle={event=>setMenuOpen(event.currentTarget.open)}><summary aria-label="More invoice actions"><span aria-hidden="true">⋯</span></summary><div className="portal-invoice-popover">
+        <div className="portal-invoice-info"><p className="caption muted">{invoice.number || 'Unissued draft'}</p>{staff && <p className="caption">{invoice.email}</p>}{invoice.status==='draft' && <p className="caption muted">Approval creates the bill.</p>}</div>
+        {invoice.hosted_invoice_url && <><a href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer">Open invoice</a><PaymentDocument clientId={clientId} entryId={`invoice:${invoice.id}`} purchase={false} api={api}/></>}
+        {invoice.status==='open' && <button type="button" disabled={busy} onClick={()=>action('refresh')}>{working ? 'Checking…' : 'Check payment status'}</button>}
+        {staff && (invoice.status==='draft'||invoice.status==='open') && <details className="portal-invoice-cancel"><summary>{invoice.status==='draft' ? 'Cancel draft' : 'Void invoice'}</summary><div className="stack"><p className="caption muted">{invoice.status==='draft' ? 'Cancel this draft to review an updated bill.' : 'This cancels the bill and returns its credits to the unbilled balance.'}</p><button type="button" disabled={busy} onClick={()=>action('void')}>{working ? 'Saving…' : invoice.status==='draft' ? 'Confirm cancellation' : 'Confirm void'}</button></div></details>}
+      </div></details>
+    </div>{copyError && <p className="caption portal-invoice-error" role="alert">{copyError}</p>}
+  </div>;
 }
 
 function PaymentReturn({client,api,setClient}:{client:ClientDetail;api:Api;setClient:(client:ClientDetail)=>void}) {
@@ -425,16 +460,16 @@ function PaymentDocument({clientId,entryId,purchase,api}:{clientId:string;entryI
 }
 
 function Field({label,...props}:{label:string;name:string;type?:string;maxLength?:number;placeholder?:string;min?:number;max?:number;step?:number}) { return <label>{label}<input {...props} required /></label>; }
-function MutationForm({children,submit,label,reset=true}:{children?:ReactNode; submit:(form:FormData,id:string)=>Promise<void>;label:string;reset?:boolean}) {
+function MutationForm({children,submit,label,reset=true,onBusyChange}:{children?:ReactNode; onBusyChange?:(busy:boolean)=>void;submit:(form:FormData,id:string)=>Promise<void>;label:string;reset?:boolean}) {
   const [busy,setBusy] = useState(false), [message,setMessage] = useState(''), [failed,setFailed] = useState(false);
   const requestId = useRef(crypto.randomUUID());
   async function onSubmit(event:FormEvent<HTMLFormElement>) {
     event.preventDefault(); if (busy) return;
     const form = event.currentTarget, data = new FormData(form);
-    setBusy(true); setMessage(''); setFailed(false);
+    setBusy(true); onBusyChange?.(true); setMessage(''); setFailed(false);
     try { await submit(data,requestId.current); if (reset) form.reset(); requestId.current=crypto.randomUUID(); setMessage('Saved.'); }
     catch(error) { setFailed(true); setMessage(error instanceof Error ? error.message : 'Unable to save. Please try again.'); }
-    finally { setBusy(false); }
+    finally { setBusy(false); onBusyChange?.(false); }
   }
   return <form className="stack portal-form" onSubmit={onSubmit}><fieldset disabled={busy} className="portal-fieldset stack">{children}<div><button type="submit" className="action">{busy?'Saving…':label}</button></div></fieldset>{message && <p className="caption" role={failed?'alert':'status'}>{message}</p>}</form>;
 }
