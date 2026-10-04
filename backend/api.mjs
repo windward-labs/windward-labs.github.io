@@ -116,6 +116,32 @@ async function handleAuthorizedApi(request, env, authenticate) {
       ]);
       return json(await detail(db,actor,clientId),201);
     }
+    const editRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/details$/);
+    if(editRoute) {
+      if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
+      requireStaff(actor);
+      const clientId=id(editRoute[1]),taskId=id(editRoute[2]);await clientAccess(db,actor,clientId);
+      const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
+      if(!task)throw new PortalError(404,'Project not found.');
+      const body=await bodyOf(request),editId=id(body.id);
+      if(Object.keys(body).some(key=>!['id','title','description','requestedBy','source','expectedVersion'].includes(key)))throw new PortalError(400,'Edit only the project title, brief, requester and source.');
+      const next={title:text(body.title,'Title',160),description:text(body.description,'Work description'),requestedBy:text(body.requestedBy,'Requested by',254),source:body.source};
+      if(!['email','text','call','meeting','other'].includes(next.source))throw new PortalError(400,'Choose a source channel.');
+      if(!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion<0)throw new PortalError(400,'Send the project details_version as expectedVersion.');
+      const serialized=JSON.stringify(next),expected=body.expectedVersion;
+      const existing=await query(db,'SELECT * FROM project_edits WHERE id=?',editId).first();
+      if(existing) {
+        if(existing.task_id!==taskId || existing.updated_details!==serialized)throw new PortalError(409,'Edit ID already used.');
+      } else {
+        const previous=JSON.stringify({title:task.title,description:task.description,requestedBy:task.requested_by,source:task.source});
+        await db.batch([
+          query(db,`INSERT INTO project_edits (id,task_id,previous_details,updated_details,created_by,actor_email) SELECT ?,id,?,?,?,? FROM tasks WHERE id=? AND client_id=? AND details_version=?`,editId,previous,serialized,actor.id,actor.email,taskId,clientId,expected),
+          query(db,`UPDATE tasks SET title=?,description=?,requested_by=?,source=?,details_version=details_version+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=?,updated_actor_email=? WHERE id=? AND client_id=? AND details_version=?`,next.title,next.description,next.requestedBy,next.source,actor.id,actor.email,taskId,clientId,expected),
+        ]);
+        if(!await query(db,'SELECT 1 FROM project_edits WHERE id=?',editId).first())throw new PortalError(409,'Project changed. Reload before editing its details.');
+      }
+      return json(await detail(db,actor,clientId));
+    }
     const dateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates\/([^/]+)$/);
     if(dateRoute) {
       if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');

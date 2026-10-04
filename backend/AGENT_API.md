@@ -68,6 +68,7 @@ Paths below are relative to the base URL. `client`, `project`, `update`,
 | `POST /clients/{client}/members` | `{email}`; approves client access |
 | `DELETE /clients/{client}/members` | `{email}`; revokes client access |
 | `POST /clients/{client}/tasks` | New project; fields below |
+| `PATCH /clients/{client}/tasks/{project}/details` | `{id,title,description,requestedBy,source,expectedVersion}`; edit project details |
 | `POST /clients/{client}/tasks/{project}/updates` | Progress note; fields below |
 | `PATCH /clients/{client}/tasks/{project}/updates/{update}` | `{occurredAt}`; correct an existing update's event date |
 | `PATCH /clients/{client}/tasks/{project}` | Same progress-note body, retained for the dashboard |
@@ -116,6 +117,14 @@ Replaying the same project UUID and original terms does not deduct again.
 Cancellation refunds once; progress updates never deduct additional credits.
 The server supplies actor identity; posted `created_by` or `actor_email` cannot
 impersonate someone else.
+
+Staff can edit the title, brief, requester and source with the details PATCH
+route. Send a new edit UUID and the current project's `details_version` as
+`expectedVersion`; keep the same edit UUID and terms on retry. A stale version
+returns 409 instead of overwriting someone else's edit. Detail edits preserve
+credits, status, attachments and ledger records, and retain before/after fields
+with staff attribution in `project_edits`. Progress/status changes use the
+updates routes, not this endpoint.
 
 ## Progress updates and email references
 

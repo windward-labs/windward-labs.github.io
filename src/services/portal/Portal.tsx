@@ -195,14 +195,14 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   </>;
 }
 
-function ProjectDialog({open,busy,onClose,children}:{open:boolean;busy:boolean;onClose:()=>void;children:ReactNode}) {
+function ProjectDialog({open,busy,onClose,children,id='record-work-form',title='New Project'}:{open:boolean;busy:boolean;onClose:()=>void;children:ReactNode;id?:string;title?:string}) {
   const dialog=useRef<HTMLDialogElement>(null);
   useEffect(()=>{
     const element=dialog.current;
     if(open && element && !element.open)element.showModal();
     else if(!open && element?.open)element.close();
   },[open]);
-  return <dialog ref={dialog} id="record-work-form" className="portal-project-dialog" aria-labelledby="new-project-title" onCancel={event=>{event.preventDefault();if(!busy)onClose();}} onClose={onClose}><div className="row"><h2 id="new-project-title">New Project</h2><button type="button" className="portal-copy-button" aria-label="Close new project" disabled={busy} onClick={onClose}>×</button></div>{children}</dialog>;
+  return <dialog ref={dialog} id={id} className="portal-project-dialog" aria-labelledby={`${id}-title`} onCancel={event=>{event.preventDefault();if(!busy)onClose();}} onClose={onClose}><div className="row"><h2 id={`${id}-title`}>{title}</h2><button type="button" className="portal-copy-button" aria-label={`Close ${title.toLowerCase()}`} disabled={busy} onClick={onClose}>×</button></div>{children}</dialog>;
 }
 
 function Billing({actor,client,api,setClient}:{actor:Actor;client:ClientDetail;api:Api;setClient:(client:ClientDetail)=>void}) {
@@ -351,6 +351,9 @@ function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:
 }
 
 function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void}) {
+  const [editing,setEditing]=useState<Task|null>(null);
+  const [editSaving,setEditSaving]=useState(false);
+  const [editSaved,setEditSaved]=useState(false);
   const updates = client.updates.filter(update=>update.task_id===task.id);
   const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
@@ -378,12 +381,18 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div>;
-  return <section className="section stack portal-project-page"><div className="row"><h1>{task.title}</h1><TaskStatus task={task}/></div><p className="caption muted">{client.name}</p>{body}</section>;
+  return <section className="section stack portal-project-page"><div className="row"><div><h1>{task.title}</h1><p className="caption muted">{client.name}</p></div><div className="portal-actions"><TaskStatus task={task}/>{staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="edit-project-details" onClick={()=>{setEditSaved(false);setEditing(task);}}>Edit details</button>}</div></div>
+    {editSaved && <p className="caption portal-edit-success" role="status">Project details updated.</p>}
+    {staff && <ProjectDialog id="edit-project-details" title="Edit project" open={!!editing} busy={editSaving} onClose={()=>setEditing(null)}>{editing && <MutationForm label="Save changes" reset={false} onBusyChange={setEditSaving} submit={async(form,id)=>{
+      const saved=await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/details`,'PATCH',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),expectedVersion:editing.details_version ?? 0});
+      setClient(saved);setEditing(null);setEditSaved(true);
+    }}><label>Project name<input name="title" required maxLength={160} defaultValue={editing.title}/></label><label>Brief<textarea name="description" required maxLength={2000} rows={4} defaultValue={editing.description}/></label><div className="fields"><label>Requested by<input name="requestedBy" required maxLength={254} defaultValue={editing.requested_by}/></label><label>Source channel<select name="source" defaultValue={editing.source}><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div></MutationForm>}</ProjectDialog>}
+    {body}</section>;
 }
 
 function ProjectVisuals({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {
   const images=attachments.filter(file=>/\.(png|jpe?g|webp|gif|avif)$/i.test(file.name));
-  return images.length ? <div className="portal-project-visuals">{images.map(file=><ProjectImage key={file.id} file={file} clientId={clientId} taskId={taskId} api={api}/>)}</div> : null;
+  return images.length ? <div className="portal-project-visuals" role="region" aria-label="Project images" tabIndex={images.length>1 ? 0 : undefined}>{images.map(file=><ProjectImage key={file.id} file={file} clientId={clientId} taskId={taskId} api={api}/>)}</div> : null;
 }
 function ProjectImage({file,clientId,taskId,api}:{file:Attachment;clientId:string;taskId:string;api:Api}) {
   const [url,setUrl]=useState(''), [failed,setFailed]=useState(false);
@@ -395,7 +404,7 @@ function ProjectImage({file,clientId,taskId,api}:{file:Attachment;clientId:strin
     }).catch(()=>{if(active)setFailed(true);});
     return ()=>{active=false; if(objectUrl)URL.revokeObjectURL(objectUrl);};
   },[api,clientId,taskId,file.id]);
-  return <figure>{url && !failed ? <a href={url} download={file.name}><img src={url} alt={file.name} onError={()=>setFailed(true)}/></a> : <div className="portal-image-placeholder caption muted">{failed ? 'Preview unavailable' : 'Loading image…'}</div>}<figcaption className="caption muted">{file.name}</figcaption></figure>;
+  return <figure>{url && !failed ? <a className="portal-image-frame" href={url} download={file.name}><img src={url} alt={file.name} onError={()=>setFailed(true)}/></a> : <div className="portal-image-frame portal-image-placeholder caption muted">{failed ? 'Preview unavailable' : 'Loading image…'}</div>}<figcaption className="caption muted" title={file.name}>{file.name}</figcaption></figure>;
 }
 
 function AttachmentList({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {

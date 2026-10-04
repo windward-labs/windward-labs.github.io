@@ -29,6 +29,7 @@ function fixture(extraEnv = {}) {
   sqlite.exec(readFileSync(new URL('../backend/migrations/0004_progress_attachments.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0005_agents.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0006_update_dates.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0007_project_edits.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -191,6 +192,38 @@ test('existing progress dates can be corrected with a retained audit and no chan
   assert.equal(changes.length,1);assert.equal(changes[0].previous_date,'2026-10-04T22:00:00.000Z');assert.equal(changes[0].actor_email,key.actor.email);
   assert.equal((await f.call(key.actor,path,'PATCH',{...body,note:'Overwritten'})).status,400);
   const other=await f.client();assert.equal((await f.call(key.actor,`/clients/${other}/tasks/${task.id}/updates/${update.id}`,'PATCH',body)).status,404);
+});
+test('staff project detail edits are versioned, audited and idempotent without rewriting charges or cancellation',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  await f.fund(clientId);await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/details`;
+  const body={id:crypto.randomUUID(),title:'Updated project name',description:'Updated client-visible brief.',requestedBy:contact.email,source:'text',expectedVersion:0};
+  assert.equal((await f.call(contact,path,'PATCH',body)).status,403);
+  const saved=await f.call(key.actor,path,'PATCH',body);
+  assert.equal(saved.status,200);assert.equal(saved.data.tasks[0].title,body.title);assert.equal(saved.data.tasks[0].description,body.description);
+  assert.equal(saved.data.tasks[0].details_version,1);assert.equal(saved.data.tasks[0].status,'in_progress');assert.equal(saved.data.balance,12);
+  assert.equal(saved.data.tasks[0].actor_email,staff.email);
+  const row=f.sqlite.prepare('SELECT * FROM tasks WHERE id=?').get(task.id);assert.equal(row.updated_actor_email,key.actor.email);
+  const charge=saved.data.ledger.find(entry=>entry.kind==='work');assert.equal(charge.credits,-4);assert.equal(charge.note,task.title);
+  assert.equal((await f.call(key.actor,path,'PATCH',body)).data.tasks[0].details_version,1);
+  const edit=f.sqlite.prepare('SELECT * FROM project_edits').get();assert.equal(edit.actor_email,key.actor.email);assert.equal(JSON.parse(edit.previous_details).title,task.title);
+  assert.equal((await f.call(key.actor,path,'PATCH',{...body,id:crypto.randomUUID(),title:'Stale overwrite'})).status,409);
+  assert.equal((await f.call(key.actor,path,'PATCH',{...body,id:crypto.randomUUID(),expectedVersion:1,credits:99})).status,400);
+  const other=await f.client();assert.equal((await f.call(key.actor,`/clients/${other}/tasks/${task.id}/details`,'PATCH',body)).status,404);
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',{id:crypto.randomUUID(),status:'cancelled',note:'Cancelled'});
+  const cancelled=await f.call(key.actor,path,'PATCH',{...body,id:crypto.randomUUID(),expectedVersion:1,title:'Corrected cancelled project'});
+  assert.equal(cancelled.status,200);assert.equal(cancelled.data.tasks[0].status,'cancelled');assert.equal(cancelled.data.balance,16);
+  assert.equal(cancelled.data.ledger.filter(entry=>entry.kind==='refund').length,1);
+});
+test('competing project detail edits cannot overwrite each other even with identical timestamps',async()=>{
+  const f=fixture(),clientId=await f.client(),task=f.work();f.at('2026-10-04T22:00:00.000Z');
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const edit=title=>({id:crypto.randomUUID(),title,description:task.description,requestedBy:task.requestedBy,source:task.source,expectedVersion:0});
+  const results=await Promise.all(['First edit','Second edit'].map(title=>f.call(staff,`/clients/${clientId}/tasks/${task.id}/details`,'PATCH',edit(title))));
+  assert.deepEqual(results.map(result=>result.status).sort(),[200,409]);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM project_edits').get().n,1);
+  assert.equal(f.sqlite.prepare('SELECT details_version FROM tasks').get().details_version,1);
+  assert.equal((await f.call(staff,`/clients/${clientId}`)).data.balance,-4);
 });
 
 test('attachments require staff uploads and current client membership for private downloads',async()=>{

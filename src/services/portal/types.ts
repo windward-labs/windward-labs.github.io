@@ -1,7 +1,7 @@
 export type Actor = { id: string; email: string; staff: boolean; automaticPayments?: boolean };
 export type ClientSummary = { id: string; name: string; balance: number; invoiced_credits?:number; active_tasks: number; created_at: string };
 export type WorkStatus = 'queued' | 'in_progress' | 'completed' | 'cancelled';
-export type Task = { id: string; title: string; description: string; requested_by: string; source: string; credits: number; status: WorkStatus; actor_email: string; created_at: string; updated_at: string };
+export type Task = { id: string; title: string; description: string; requested_by: string; source: string; credits: number; status: WorkStatus; actor_email: string; created_at: string; updated_at: string; details_version?: number };
 export type TaskUpdate = { id: string; task_id: string; status: WorkStatus; note: string; actor_email: string; created_at: string; occurred_at?: string | null };
 export type LedgerEntry = { id: string; task_id: string | null; kind: 'purchase' | 'work' | 'refund' | 'billing'; credits: number; reference: string | null; note: string; actor_email: string; created_at: string };
 export type Attachment = {id:string;task_id:string;update_id?:string|null;name:string;size:number;created_at:string};

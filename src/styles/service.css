@@ -204,11 +204,15 @@
 .portal-success, .portal-status-neutral { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; background: #f0fdf4; color: #166534; border: 1px solid #bbf7d0; font-weight: 600; }
 .portal-status-neutral { background: #f5f5f5; color: #737373; border-color: #e5e5e5; }
 .portal-empty-state { display: grid; justify-items: start; gap: 12px; padding: 32px; border: 1px dashed #d4d4d4; border-radius: 4px; }
-.portal-project-visuals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 16px; }
-.portal-project-visuals figure { margin: 0; min-width: 0; }
-.portal-project-visuals img { display: block; width: auto; max-width: 100%; max-height: 360px; object-fit: contain; border: 1px solid #dedede; border-radius: 4px; background: #f5f5f5; }
-.portal-project-visuals figcaption { margin-top: 8px; overflow-wrap: anywhere; }
+.portal-project-visuals { display: flex; gap: 16px; min-width: 0; overflow-x: auto; padding-bottom: 12px; scroll-snap-type: x mandatory; overscroll-behavior-x: contain; }
+.portal-project-visuals figure { flex: 0 0 82%; margin: 0; min-width: 0; scroll-snap-align: start; }
+.portal-project-visuals figure:only-child { flex-basis: 100%; }
+.portal-image-frame { display: flex; align-items: center; justify-content: center; width: 100%; height: 320px; border: 1px solid #dedede; border-radius: 4px; background: #f5f5f5; }
+.portal-project-visuals img { display: block; width: auto; height: auto; max-width: 100%; max-height: 100%; object-fit: contain; }
+.portal-project-visuals figcaption { height: 24px; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .portal-image-placeholder { padding: 32px; background: #f5f5f5; border-radius: 4px; }
+.portal-edit-success { color: #166534; }
+@media (max-width: 640px) { .portal-image-frame { height: 240px; } }
 .portal-timeline { list-style: none; margin: 0 0 0 6px; padding: 0 0 0 24px; border-left: 1px solid #d4d4d4; }
 .portal-timeline li { position: relative; display: grid; gap: 8px; padding-bottom: 24px; }
 .portal-timeline li:last-child { padding-bottom: 0; }
@@ -243,8 +247,6 @@
 .workspace .portal-project-link { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 12px 0; text-decoration: none; }
 .workspace .portal-project-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 4px; }
 .portal-project-link > span:first-child { font-weight: 600; }
-.portal-project-page .portal-project-visuals { grid-template-columns: 1fr; }
-.portal-project-page .portal-project-visuals img { max-height: 720px; }
 .portal-project-page .details-body { padding: 0; }
 .workspace .portal-credit-table :is(th,td):nth-child(3) { text-align: right; }
 .portal-credit-table .portal-payment-document { margin-top: 0; }
