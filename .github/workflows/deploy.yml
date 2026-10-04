@@ -22,6 +22,14 @@ jobs:
         uses: actions/checkout@v4
       - name: Install and Build
         uses: withastro/action@v3
+        env:
+          PUBLIC_PRIVY_APP_ID: ${{ vars.PUBLIC_PRIVY_APP_ID }}
+          PUBLIC_PRIVY_CLIENT_ID: ${{ vars.PUBLIC_PRIVY_CLIENT_ID }}
+          PUBLIC_SERVICE_API_URL: ${{ vars.PUBLIC_SERVICE_API_URL }}
+      - name: Validate portal
+        run: |
+          npm run typecheck
+          npm test
   deploy:
     needs: build
     runs-on: ubuntu-latest

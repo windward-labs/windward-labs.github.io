@@ -1,0 +1,23 @@
+{
+  "$schema": "../node_modules/wrangler/config-schema.json",
+  "name": "windward-service-api",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-10-03",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "vars": {
+    "STRIPE_MODE": "live",
+    "ALLOWED_ORIGINS": "https://windwardlabs.xyz",
+    "PRIVY_APP_ID": "cmutciw9j00se0cl3e3jpn3us"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "windward-service",
+      "database_id": "d537de2a-33a0-4e54-b222-b93b9da1b0ef",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "account_id": "2fe64b98adb85ae1a593cfcc07deb389"
+}

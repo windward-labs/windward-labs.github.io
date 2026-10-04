@@ -1,0 +1,49 @@
+---
+import { creditPacks, formatPrice } from '../services/pricing.mjs';
+import { stripeCreditPacks } from '../services/stripe-catalog.mjs';
+interface Props { showBack?: boolean }
+const { showBack = true } = Astro.props;
+---
+<section class="section credit-checkout" aria-labelledby="checkout-title">
+  <div class="row section-title">
+    <h2 id="checkout-title" tabindex="-1">Add credits</h2>
+    {showBack && <a href="/service/">Back to requests</a>}
+  </div>
+  <form class="stack checkout-form" action={stripeCreditPacks[32].paymentLink} method="get" target="_blank" rel="noopener noreferrer">
+    <div><label for="pack">Credit pack</label><select id="pack">{creditPacks.map((pack) => <option value={pack.credits} data-payment-link={stripeCreditPacks[pack.credits].paymentLink} selected={pack.credits === 32}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></div>
+    <div class="row"><span>Credits</span><output id="pack-total" for="pack">32 credits</output></div>
+    <div class="row"><span>Subtotal · USD</span><output id="pack-price" for="pack" aria-live="polite">{formatPrice(creditPacks[1].amountCents)}</output></div>
+    <p class="caption muted">$75 per credit · One-time purchase</p>
+    <p class="caption muted">Applicable tax and available payment methods are shown at Stripe checkout.</p>
+    <div><button type="submit" class="action" aria-describedby="checkout-note">Continue to Stripe</button></div>
+    <p class="caption muted" id="checkout-note">Opens in a new tab. This is a real purchase. Use your client account email and business name. Windward adds credits manually after confirming payment; the preview balance does not update.</p>
+    <noscript>
+      <style>.checkout-form > :not(noscript) { display: none; }</style>
+      <p>Choose a pack to pay with Stripe:</p>
+      <ul>{creditPacks.map((pack) => <li><a href={stripeCreditPacks[pack.credits].paymentLink} target="_blank" rel="noopener noreferrer">{pack.credits} credits · {formatPrice(pack.amountCents)}</a></li>)}</ul>
+      <p class="caption muted">Applicable tax is shown at checkout. These are real purchases. Use your client account email and business name. Windward adds credits manually after confirming payment; the preview balance does not update.</p>
+    </noscript>
+  </form>
+</section>
+
+<script>
+  import { creditPacks, formatPrice } from '../services/pricing.mjs';
+  const pack = document.querySelector<HTMLSelectElement>('#pack');
+  function updatePack() {
+    if (!pack) return;
+    document.querySelector<HTMLOutputElement>('#pack-total')!.value = `${pack.value} credits`;
+    const selected = creditPacks.find((item) => item.credits === Number(pack.value));
+    if (selected) document.querySelector<HTMLOutputElement>('#pack-price')!.value = formatPrice(selected.amountCents);
+    const paymentLink = pack.selectedOptions[0]?.dataset.paymentLink;
+    if (paymentLink && pack.form) pack.form.action = paymentLink;
+  }
+  pack?.addEventListener('change', updatePack);
+  // Browser-restored selections must use the same pack at Stripe checkout.
+  pack?.form?.addEventListener('submit', updatePack);
+  window.addEventListener('pageshow', updatePack);
+  updatePack();
+</script>
+
+<style>
+  .checkout-form { max-width: 560px; }
+</style>

@@ -1,0 +1,6 @@
+PRIVY_APP_ID=""
+PRIVY_APP_SECRET=""
+STRIPE_MODE="test"
+STRIPE_SECRET_KEY=""
+# Filled by npm run dev:stripe for local webhook forwarding.
+STRIPE_WEBHOOK_SECRET=""

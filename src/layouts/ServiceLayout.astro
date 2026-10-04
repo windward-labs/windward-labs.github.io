@@ -1,0 +1,17 @@
+---
+import BaseLayout from './BaseLayout.astro';
+import '../styles/service.css';
+interface Props { title: string }
+const { title } = Astro.props;
+---
+<BaseLayout title={`${title} — Windward Labs`}>
+  <meta slot="head" name="robots" content="noindex, nofollow" />
+  <main class="workspace">
+    <header class="masthead">
+      <a href="/" class="wordmark">Windward Labs</a>
+      <nav id="service-session" aria-label="Account"></nav>
+    </header>
+    <slot />
+    <footer class="workspace-footer"><span>© 2026 Windward Labs, Inc.</span></footer>
+  </main>
+</BaseLayout>

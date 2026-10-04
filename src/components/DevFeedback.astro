@@ -1,0 +1,23 @@
+<!-- Keep annotation tools and their dependencies out of the production site. -->
+<script>
+  if (import.meta.env.DEV) {
+    const [{ createElement }, { createRoot }, { Agentation }] = await Promise.all([
+      import('react'),
+      import('react-dom/client'),
+      import('agentation'),
+    ]);
+
+    const container = document.createElement('div');
+    container.id = 'windward-dev-feedback';
+    document.body.append(container);
+    const root = createRoot(container);
+    root.render(createElement(Agentation));
+
+    if (import.meta.hot) {
+      import.meta.hot.dispose(() => {
+        root.unmount();
+        container.remove();
+      });
+    }
+  }
+</script>
