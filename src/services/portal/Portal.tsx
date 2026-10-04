@@ -179,9 +179,9 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
         <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
       </MutationForm></ProjectDialog>}
-        {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
+        {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div>}
       </section>
-      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><a key={task.id} className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(client.id)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task}/><span aria-hidden="true">›</span></span></a>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
       <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table className="portal-credit-table" aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th><th><span className="portal-pack-legend">Invoice</span></th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td><td>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
@@ -341,21 +341,23 @@ function ProjectCreatedToast({clientId,success,onDismiss}:{clientId:string;succe
     <button type="button" className="portal-toast-dismiss" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
   </div>,document.body);
 }
+function ProjectLink({task,clientId}:{task:Task;clientId:string}) {
+  return <a className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task}/><span aria-hidden="true">›</span></span></a>;
+}
 function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:ClientDetail;projectId:string;api:Api;setClient:(client:ClientDetail)=>void}) {
   const task=client.tasks.find(task=>task.id===projectId);
   const target=document.getElementById('service-credit-action');
-  return <>{target && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient} standalone/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
+  return <>{target && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
 }
 
-function TaskView({task,client,staff,api,setClient,standalone=false}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void;standalone?:boolean}) {
+function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void}) {
   const updates = client.updates.filter(update=>update.task_id===task.id);
   const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const [files,setFiles]=useState<PendingFile[]>([]);
   const [fileError,setFileError]=useState('');
   const [pendingUpdate,setPendingUpdate]=useState('');
-  const [expanded,setExpanded]=useState(false);
-  const body = <div className="stack details-body">{(expanded || standalone) && <ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/>}<p className="portal-description">{task.description}</p>
+  const body = <div className="stack details-body"><ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/><p className="portal-description">{task.description}</p>
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
     <div className="stack"><h3>Activity</h3><ol className="portal-timeline">{timeline.map(item=><li key={item.id}><div className="row"><strong>{item.update ? statusNames[item.update.status] : 'Project recorded'}</strong><time className="caption muted" dateTime={item.at}>{date(item.at)}</time></div>{item.update ? <><p className="portal-description">{item.update.note}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol></div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
@@ -376,7 +378,7 @@ function TaskView({task,client,staff,api,setClient,standalone=false}:{task:Task;
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div>;
-  return standalone ? <section className="section stack portal-project-page"><div className="row"><h1>{task.title}</h1><TaskStatus task={task}/></div><p className="caption muted">{client.name}</p>{body}</section> : <details onToggle={event=>setExpanded(event.currentTarget.open)} className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><TaskStatus task={task}/></summary>{body}</details>;
+  return <section className="section stack portal-project-page"><div className="row"><h1>{task.title}</h1><TaskStatus task={task}/></div><p className="caption muted">{client.name}</p>{body}</section>;
 }
 
 function ProjectVisuals({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {
