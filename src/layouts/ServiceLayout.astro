@@ -6,12 +6,15 @@ const { title } = Astro.props;
 ---
 <BaseLayout title={`${title} — Windward Labs`}>
   <meta slot="head" name="robots" content="noindex, nofollow" />
-  <main class="workspace">
-    <header class="masthead">
+  <div class="workspace">
+    <aside class="masthead" aria-label="Service navigation">
       <a href="/" class="wordmark">Windward Labs</a>
-      <nav id="service-session" aria-label="Account"></nav>
-    </header>
-    <slot />
-    <footer class="workspace-footer"><span>© 2026 Windward Labs, Inc.</span></footer>
-  </main>
+      <nav class="service-navigation" aria-label="Service"><a href="/service/">Dashboard</a></nav>
+      <div id="service-session"></div>
+    </aside>
+    <main class="workspace-content">
+      <slot />
+      <footer class="workspace-footer"><span>© 2026 Windward Labs, Inc.</span></footer>
+    </main>
+  </div>
 </BaseLayout>

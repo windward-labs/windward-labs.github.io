@@ -101,7 +101,7 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
     return ()=>{ document.removeEventListener('pointerdown',dismiss); document.removeEventListener('keydown',escape); };
   },[open]);
   return <div ref={container} className="portal-session" onBlur={event=>{ if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <button ref={trigger} type="button" className="plain-button portal-account-trigger" aria-expanded={open} aria-controls="portal-account-popover" onClick={()=>setOpen(value=>!value)}>
+    <button ref={trigger} type="button" className="plain-button portal-account-trigger" title={email} aria-expanded={open} aria-controls="portal-account-popover" onClick={()=>setOpen(value=>!value)}>
       <span>{email}</span>
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
     </button>
