@@ -8,6 +8,7 @@ import { isStaffEmail, PortalError } from '../backend/domain.mjs';
 import worker from '../backend/worker.mjs';
 import Stripe from 'stripe';
 import { fulfillCheckout, handleStripeWebhook } from '../backend/stripe.mjs';
+import { stripeCreditPacks } from '../src/services/stripe-catalog.mjs';
 import { paymentDocument } from '../backend/payment-documents.mjs';
 import { PDFDocument } from 'pdf-lib';
 import { maxAttachmentBytes } from '../backend/attachments.mjs';
@@ -508,4 +509,24 @@ test('existing purchase invoice PDFs are downloaded without creating another inv
   await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe,async()=>new Response(null,{status:302,headers:{Location:'https://attacker.example/pdf'}})),/Invalid invoice download URL/);
   invoice.invoice_pdf='https://stripe.com.attacker.example/pdf';
   await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe),/Invalid invoice download URL/);
+});
+
+
+test('eight-credit purchases award exactly eight credits in both catalogs and reject a mismatched amount',async()=>{
+  for(const mode of ['test','live']) {
+    const f=fixture(), clientId=await f.client(), session=paidSession(clientId);
+    session.livemode=mode==='live'; session.id=`cs_${mode}_eight`;
+    session.amount_subtotal=60000;session.total_details.amount_tax=0;
+    session.line_items.data[0]={price:{id:mode==='live' ? stripeCreditPacks[8].priceId : 'price_1UMwWLLFTZ7EIElECMrKEp3m'},quantity:1,currency:'usd',amount_subtotal:60000,amount_discount:0,amount_total:60000};
+    const stripe={checkout:{sessions:{retrieve:async()=>structuredClone(session)}}}, env={STRIPE_MODE:mode};
+    await Promise.all([fulfillCheckout(env,f.DB,session.id,clientId,stripe),fulfillCheckout(env,f.DB,session.id,clientId,stripe)]);
+    let account=(await f.call(contact,`/clients/${clientId}`)).data;
+    assert.equal(account.balance,8);assert.equal(account.ledger.length,1);
+    session.payment_intent='pi_bad_eight';session.amount_subtotal=120000;
+    await assert.rejects(fulfillCheckout(env,f.DB,session.id,clientId,stripe),/fixed credit pack/);
+    assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,8);
+    assert.equal((await f.fund(clientId,'pi_manualeight',8)).status,200);
+    assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,16);
+    f.sqlite.close();
+  }
 });

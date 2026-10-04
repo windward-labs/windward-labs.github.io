@@ -40,6 +40,7 @@ Production builds always use the live catalog.
 Set these public URLs in `.env.local` and restart the Astro dev server:
 
 ```env
+PUBLIC_STRIPE_TEST_LINK_8=https://buy.stripe.com/test_7sYbJ24UadN4gysbHWeME03
 PUBLIC_STRIPE_TEST_LINK_16=https://buy.stripe.com/test_fZu8wQeuKdN4cic13ieME00
 PUBLIC_STRIPE_TEST_LINK_32=https://buy.stripe.com/test_6oU8wQfyO8sK3LG8vKeME01
 PUBLIC_STRIPE_TEST_LINK_64=https://buy.stripe.com/test_aFabJ2dqG6kC5TO7rGeME02

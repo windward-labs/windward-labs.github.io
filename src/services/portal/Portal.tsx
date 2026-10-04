@@ -33,6 +33,7 @@ function AuthenticatedPortal() {
   const paymentReturn = params.get('payment') === 'returned';
   const selectedId = params.get('id') || params.get('client') || (paymentReturn ? params.get('utm_content') : null);
   const checkoutOnly = window.location.pathname.replace(/\/$/,'') === '/service/checkout';
+  const projectId = window.location.pathname.replace(/\/$/,'') === '/service/project' ? params.get('project') : null;
   const api: Api = useCallback(async (path, method = 'GET', body, responseType = 'json') => {
     if (!apiUrl) throw new Error('The portal is being set up. Please contact Windward for account access.');
     if (import.meta.env.DEV && !isLocalApi(apiUrl)) throw new Error('Local testing requires a local service API. Set PUBLIC_SERVICE_API_URL=http://localhost:8787.');
@@ -69,7 +70,7 @@ function AuthenticatedPortal() {
   return <>
     {sessionTarget && createPortal(<AccountMenu email={actor?.email || user?.email?.address || 'Account'} onSignOut={() => { setActor(null); setClients([]); setClient(null); void logout(); }}/>,sessionTarget)}
     {loading ? <p role="status" className="portal-loading">Loading your account…</p> : error ? <section className="section stack"><h1>Account unavailable</h1><p role="alert">{error}</p><div><button className="plain-button" onClick={() => setRevision(value=>value+1)}>Try again</button></div></section> : actor && <>
-      {client ? <ClientView key={client.id} actor={actor} client={client} api={api} setClient={setClient} checkoutOnly={checkoutOnly} paymentReturn={paymentReturn} /> : <>
+      {client ? projectId ? <ProjectPage actor={actor} client={client} projectId={projectId} api={api} setClient={setClient}/> : <ClientView key={client.id} actor={actor} client={client} api={api} setClient={setClient} checkoutOnly={checkoutOnly} paymentReturn={paymentReturn} /> : <>
         <section className="section stack">
           <div className="row">
             <h1>{actor.staff ? 'Clients' : 'Your accounts'}</h1>
@@ -163,7 +164,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         setWorkFiles([]);
         setWorkHours('');
       }}>
-        <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the agreed work. This is visible to the client."/></label>
+        <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
@@ -173,9 +174,9 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       </MutationForm></div>}
         {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
       </section>
-      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><a key={task.id} className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(client.id)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task}/><span aria-hidden="true">›</span></span></a>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
-      <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table className="portal-credit-table" aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th><th><span className="portal-pack-legend">Invoice</span></th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td><td>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
         {!actor.automaticPayments && <section className="section"><h2 className="portal-heading">Confirm credit purchase</h2><MutationForm label="Add confirmed credits" submit={async(form)=>mutate('purchases','POST',{credits:Number(form.get('credits')),reference:form.get('reference'),note:form.get('note')})}>
           <label>Credit pack<select name="credits">{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label><Field label="Stripe PaymentIntent ID" name="reference" maxLength={200} placeholder="pi_…"/><Field label="Verification note" name="note" maxLength={2000} placeholder="Payment confirmed in Stripe"/>
@@ -286,14 +287,23 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
   }}/></label><p id={helpId} className="caption muted">Up to 5 files, 10 MB each. Visible to this client’s approved emails and Windward staff.</p></>;
 }
 
-function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void}) {
+function TaskStatus({task}:{task:Task}) {
+  return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'muted'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
+}
+function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:ClientDetail;projectId:string;api:Api;setClient:(client:ClientDetail)=>void}) {
+  const task=client.tasks.find(task=>task.id===projectId);
+  const target=document.getElementById('service-credit-action');
+  return <>{target && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient} standalone/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
+}
+
+function TaskView({task,client,staff,api,setClient,standalone=false}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void;standalone?:boolean}) {
   const updates = client.updates.filter(update=>update.task_id===task.id);
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const [files,setFiles]=useState<PendingFile[]>([]);
   const [fileError,setFileError]=useState('');
   const [pendingUpdate,setPendingUpdate]=useState('');
   const [expanded,setExpanded]=useState(false);
-  return <details onToggle={event=>setExpanded(event.currentTarget.open)} className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'muted'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span></summary><div className="stack details-body">{expanded && <ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/>}<p className="portal-description">{task.description}</p>
+  const body = <div className="stack details-body">{(expanded || standalone) && <ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/>}<p className="portal-description">{task.description}</p>
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
     <div className="stack"><h3>Activity</h3><ol className="portal-timeline"><li><div className="row"><strong>Project recorded</strong><time className="caption muted" dateTime={task.created_at}>{date(task.created_at)}</time></div><p className="caption muted">Requested by {task.requested_by} via {task.source}</p></li>{[...updates].reverse().map(update=><li key={update.id}><div className="row"><strong>{statusNames[update.status]}</strong><time className="caption muted" dateTime={update.created_at}>{date(update.created_at)}</time></div><p className="portal-description">{update.note}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===update.id)} clientId={client.id} taskId={task.id} api={api}/></li>)}</ol></div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
@@ -313,7 +323,8 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
       {fileError && <p role="alert">{fileError}</p>}
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
-  </div></details>;
+  </div>;
+  return standalone ? <section className="section stack portal-project-page"><div className="row"><h1>{task.title}</h1><TaskStatus task={task}/></div><p className="caption muted">{client.name}</p>{body}</section> : <details onToggle={event=>setExpanded(event.currentTarget.open)} className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><TaskStatus task={task}/></summary>{body}</details>;
 }
 
 function ProjectVisuals({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {
@@ -351,10 +362,11 @@ function AttachmentList({attachments,clientId,taskId,api}:{attachments:Attachmen
 
 function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:string;automaticPayments:boolean}) {
   const clientId = client.id;
-  const [credits,setCredits] = useState<16 | 32 | 64>(32);
+  const [credits,setCredits] = useState<8 | 16 | 32 | 64>(32);
   const pack = creditPacks.find(pack=>pack.credits===credits)!;
   const testMode = import.meta.env.DEV;
   const link = checkoutLink(credits,testMode,{
+    8:import.meta.env.PUBLIC_STRIPE_TEST_LINK_8,
     16:import.meta.env.PUBLIC_STRIPE_TEST_LINK_16,
     32:import.meta.env.PUBLIC_STRIPE_TEST_LINK_32,
     64:import.meta.env.PUBLIC_STRIPE_TEST_LINK_64,
@@ -368,14 +380,14 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
   url?.searchParams.set('prefilled_email',email);
   return <section id="portal-credit-checkout" className="section stack portal-checkout">
     <div className="row"><h2>Add credits</h2><span className="caption muted">{client.name}</span></div>
-    {testMode && <p role="status">Stripe test mode · No real money is charged. Credits are recorded in the local database.</p>}
+    {testMode && <p className="caption muted" role="status">Stripe test mode · No real money is charged.</p>}
     <p className="muted">Choose credits for design and engineering work.</p>
     <div className="portal-checkout-layout">
       <fieldset className="portal-pack-options"><legend className="portal-pack-legend">Choose a credit pack</legend>{[...creditPacks].reverse().map(option=>{
         const savings = option.credits * creditPriceCents - option.amountCents;
         const lastPurchase = client.ledger.find(entry=>entry.kind==='purchase');
         return <label key={option.credits} className={`portal-pack ${credits===option.credits ? 'portal-pack-selected' : ''}`}>
-          <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 16 | 32 | 64)}/>
+          <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 8 | 16 | 32 | 64)}/>
           <span className="portal-pack-content">
             <span className="row portal-pack-heading"><span>{option.name}</span><span>{formatPrice(option.amountCents)}</span></span>
             <span className="muted">{option.credits} credits · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
@@ -387,7 +399,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
       <div className="stack portal-order-summary" aria-live="polite" aria-atomic="true">
         <h3>Order summary</h3>
         <div className="row"><span>{pack.name} · {pack.credits} credits</span><span>{formatPrice(pack.amountCents)}</span></div>
-        <div className="row portal-checkout-balance"><span>Balance after</span><span>{client.balance<0 ? `${-client.balance} owed` : `${client.balance} available`} → {client.balance+credits<0 ? `${-(client.balance+credits)} owed` : `${client.balance+credits} available`}</span></div>
+        <dl className="portal-checkout-balance"><div className="row"><dt>Before purchase</dt><dd>{client.balance<0 ? `${-client.balance} credits owed` : `${client.balance} credits`}</dd></div><div className="row"><dt>After purchase</dt><dd><strong>{client.balance+credits<0 ? `${-(client.balance+credits)} credits owed` : `${client.balance+credits} credits`}</strong></dd></div></dl>
         <p className="caption muted">One-time purchase · USD. Applicable tax is shown at checkout. Fast delivery uses more credits.</p>
         {client.balance<0 && <p className="caption muted">Purchased credits first cover your {-client.balance} unbilled credits owed.</p>}
         {!!client.invoiced_credits && <p className="caption muted">Issued invoices are paid separately using their payment links.</p>}
@@ -409,7 +421,7 @@ function PaymentDocument({clientId,entryId,purchase,api}:{clientId:string;entryI
       setTimeout(()=>URL.revokeObjectURL(url),1000);
     } catch(error) {setError(error instanceof Error ? error.message : 'Unable to download the document.');}
     finally {setBusy(false);}
-  }}>{busy ? 'Downloading…' : purchase ? 'Download invoice / receipt' : 'Download invoice'}</button>{error && <p className="caption" role="alert">{error}</p>}</div>;
+  }}>{busy ? 'Downloading…' : 'Download invoice'}</button>{error && <p className="caption" role="alert">{error}</p>}</div>;
 }
 
 function Field({label,...props}:{label:string;name:string;type?:string;maxLength?:number;placeholder?:string;min?:number;max?:number;step?:number}) { return <label>{label}<input {...props} required /></label>; }
