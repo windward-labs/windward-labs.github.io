@@ -144,7 +144,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
-      <section className="section"><div className="row section-title"><h2>Work & progress</h2><div className="portal-actions"><span className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</span>{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>Record work</button>}</div></div>
+      <section className="section"><div className="row section-title"><div><h2>Work & progress</h2><p className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>New Project</button>}</div></div>
       {actor.staff && <div id="record-work-form" className="portal-work-form" hidden={!showWorkForm}><MutationForm label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
