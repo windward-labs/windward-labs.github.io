@@ -28,7 +28,13 @@ if (process.argv.includes('--redirects')) {
   const url='https://windward-service-api.windwardlabs.workers.dev/v1/stripe/webhook';
   const endpoints=await stripe.webhookEndpoints.list({limit:100});
   let endpoint=endpoints.data.find(endpoint=>endpoint.url===url && endpoint.livemode);
-  const required=['checkout.session.completed','checkout.session.async_payment_succeeded'];
+  const required=['checkout.session.completed','checkout.session.async_payment_succeeded','invoice.paid','invoice.voided'];
+  if (process.argv.includes('--events-only')) {
+    if (!endpoint) throw new Error('The production webhook must be provisioned first.');
+    await stripe.webhookEndpoints.update(endpoint.id,{enabled_events:endpoint.enabled_events.includes('*') ? ['*'] : [...new Set([...endpoint.enabled_events,...required])],disabled:false});
+    console.log('Live webhook events updated for credit purchases and invoice settlement.');
+    process.exit(0);
+  }
   if (!endpoint) {
     endpoint=await stripe.webhookEndpoints.create({url,enabled_events:required,description:'Windward service credit fulfillment'});
     env.STRIPE_WEBHOOK_SECRET=endpoint.secret;

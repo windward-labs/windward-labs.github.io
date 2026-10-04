@@ -9,6 +9,7 @@ import worker from '../backend/worker.mjs';
 import Stripe from 'stripe';
 import { fulfillCheckout, handleStripeWebhook } from '../backend/stripe.mjs';
 import { maxAttachmentBytes } from '../backend/attachments.mjs';
+import { billingPreview, issueInvoice, refreshInvoice, voidInvoice, fulfillInvoiceEvent } from '../backend/billing.mjs';
 
 const staff = {id:'did:privy:staff',email:'phil@windwardlabs.xyz',staff:true};
 const contact = {id:'did:privy:client',email:'alex@example.com',staff:false};
@@ -17,19 +18,30 @@ function fixture(extraEnv = {}) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0001_portal.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0002_attachments.sql',import.meta.url),'utf8'));
+  sqlite.exec('BEGIN');
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0003_overage_billing.sql',import.meta.url),'utf8'));
+  sqlite.exec('COMMIT');
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0004_progress_attachments.sql',import.meta.url),'utf8'));
+  let clock=new Date().toISOString();
+  sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
     bind(...args) { return wrap(sql,args); },
     async first() { return sqlite.prepare(sql).get(...values) ?? null; },
     async all() { return {results:sqlite.prepare(sql).all(...values)}; },
     async run() { return {meta:sqlite.prepare(sql).run(...values)}; },
   });
-  const DB = {prepare:wrap,async batch(statements) {
-    sqlite.exec('BEGIN');
-    try { const results=[]; for (const statement of statements) results.push(await statement.all()); sqlite.exec('COMMIT'); return results; }
-    catch(error) { sqlite.exec('ROLLBACK'); throw error; }
+  let batchTail=Promise.resolve();
+  const DB = {prepare:wrap,batch(statements) {
+    const result=batchTail.then(async()=>{
+      sqlite.exec('BEGIN');
+      try { const results=[]; for (const statement of statements) results.push(await statement.all()); sqlite.exec('COMMIT'); return results; }
+      catch(error) { sqlite.exec('ROLLBACK'); throw error; }
+    });
+    batchTail=result.catch(()=>{});
+    return result;
   }};
   async function call(actor,path,method='GET',body) {
-    const response = await handleApi(new Request(`https://api.example.com/v1${path}`,{method,...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})}),{DB,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
+    const response = await handleApi(new Request(`https://api.example.com/v1${path}`,{method,...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})}),{DB,...testStripeEnv,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
     return {status:response.status,data:await response.json()};
   }
   async function client() {
@@ -39,10 +51,10 @@ function fixture(extraEnv = {}) {
   }
   async function fund(id,reference='pi_payment1',credits=16) { return call(staff,`/clients/${id}/purchases`,'POST',{credits,reference,note:'Confirmed successful payment in Stripe'}); }
   function work(credits=4) { return {id:crypto.randomUUID(),title:'Review onboarding',description:'Review the flow requested by email.',requestedBy:contact.email,source:'email',credits,status:'in_progress'}; }
-  async function file(actor,clientId,taskId,attachmentId,method='POST',bytes='file contents',headers={}) {
-    return handleApi(new Request(`https://api.example.com/v1/clients/${clientId}/tasks/${taskId}/attachments/${attachmentId}`,{method,...(method==='POST'?{body:bytes,headers:{'X-File-Name':encodeURIComponent('design résumé.png'),'Content-Type':'image/png',...headers}}:{})}),{DB,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
+  async function file(actor,clientId,taskId,attachmentId,method='POST',bytes='file contents',headers={},updateId='') {
+    return handleApi(new Request(`https://api.example.com/v1/clients/${clientId}/tasks/${taskId}/attachments/${attachmentId}${updateId ? `?update=${encodeURIComponent(updateId)}` : ''}`,{method,...(method==='POST'?{body:bytes,headers:{'X-File-Name':encodeURIComponent('design résumé.png'),'Content-Type':'image/png',...headers}}:{})}),{DB,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
   }
-  return {sqlite,DB,call,client,fund,work,file};
+  return {sqlite,DB,call,client,fund,work,file,at(value){clock=value;}};
 }
 
 function attachmentStorage() {
@@ -105,6 +117,49 @@ test('attachment limits reject empty and oversized streams and cap concurrent up
   assert.deepEqual(responses.map(response=>response.status).sort(),[200,200,200,200,200,409]);
   assert.equal((await f.call(contact,`/clients/${clientId}`)).data.attachments.length,5);
   assert.equal(bucket.objects.size,5);
+  f.sqlite.close();
+});
+
+test('progress attachments belong to the saved update and enforce per-update limits and account access',async()=>{
+  const bucket=attachmentStorage(), f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), otherId=await f.client(), task=f.work(), otherTask=f.work();
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',task); await f.call(staff,`/clients/${otherId}/tasks`,'POST',otherTask);
+  const update={id:crypto.randomUUID(),status:'in_progress',note:'Design exploration.'}, otherUpdate={...update,id:crypto.randomUUID()};
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',update);
+  await f.call(staff,`/clients/${otherId}/tasks/${otherTask.id}`,'PATCH',otherUpdate);
+  const upload=(actor,attachmentId,updateId=update.id)=>f.file(actor,clientId,task.id,attachmentId,'POST','progress file',{},updateId);
+  assert.equal((await upload(contact,crypto.randomUUID())).status,403);
+  assert.equal((await upload(outsider,crypto.randomUUID())).status,404);
+  assert.equal((await upload(staff,crypto.randomUUID(),otherUpdate.id)).status,404);
+  assert.equal((await upload(staff,crypto.randomUUID(),crypto.randomUUID())).status,404);
+  assert.equal((await upload(staff,crypto.randomUUID(),'invalid')).status,400);
+  const rootId=crypto.randomUUID();assert.equal((await f.file(staff,clientId,task.id,rootId)).status,200);
+  assert.equal((await upload(staff,rootId)).status,409);
+  const ids=Array.from({length:6},()=>crypto.randomUUID());
+  const responses=await Promise.all(ids.map(attachmentId=>upload(staff,attachmentId)));
+  assert.deepEqual(responses.map(response=>response.status).sort(),[200,200,200,200,200,409]);
+  const savedId=ids[responses.findIndex(response=>response.status===200)];
+  assert.equal((await upload(staff,savedId)).status,200);
+  const detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.attachments.filter(file=>file.update_id===update.id).length,5);
+  assert.equal(detail.attachments.filter(file=>!file.update_id).length,1);
+  assert.equal(detail.balance,-4);
+  assert.equal((await f.file(contact,clientId,task.id,savedId,'GET')).status,200);
+  f.sqlite.close();
+});
+
+test('a cancelled progress update can resume failed attachments without duplicating the update or refund',async()=>{
+  const bucket=attachmentStorage(), put=bucket.put, f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), task=f.work();
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const update={id:crypto.randomUUID(),status:'cancelled',note:'Cancelled with supporting document.'}, attachmentId=crypto.randomUUID();
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',update);
+  bucket.put=async()=>{throw new Error('Temporary storage failure');};
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId,'POST','file contents',{},update.id)).status,500);
+  bucket.put=put;
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',update);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId,'POST','file contents',{},update.id)).status,200);
+  const detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,0);assert.equal(detail.updates.length,1);assert.equal(detail.ledger.filter(row=>row.kind==='refund').length,1);
+  assert.equal(detail.attachments[0].update_id,update.id);
   f.sqlite.close();
 });
 
@@ -213,15 +268,17 @@ test('work deducts once, progress is free, cancellation refunds once and preserv
   f.sqlite.close();
 });
 
-test('overdrafts roll back the work record, charge, and balance; competing charges cannot overspend',async()=>{
+test('work beyond prepaid credits is recorded atomically, including competing charges and safe retries',async()=>{
   const f=fixture(), id=await f.client(); await f.fund(id);
-  assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',f.work(17))).status,409);
+  const task=f.work(17);
+  assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',task)).status,200);
+  assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',task)).data.balance,-1);
   let detail=(await f.call(contact,`/clients/${id}`)).data;
-  assert.equal(detail.balance,16); assert.equal(detail.tasks.length,0); assert.equal(detail.ledger.length,1);
+  assert.equal(detail.balance,-1); assert.equal(detail.tasks.length,1); assert.equal(detail.ledger.length,2);
   const results=await Promise.all([f.call(staff,`/clients/${id}/tasks`,'POST',f.work(12)),f.call(staff,`/clients/${id}/tasks`,'POST',f.work(12))]);
-  assert.deepEqual(results.map(result=>result.status).sort(),[200,409]);
+  assert.deepEqual(results.map(result=>result.status).sort(),[200,200]);
   detail=(await f.call(contact,`/clients/${id}`)).data;
-  assert.equal(detail.balance,4); assert.equal(detail.tasks.length,1); assert.equal(detail.ledger.length,2);
+  assert.equal(detail.balance,-25); assert.equal(detail.tasks.length,3); assert.equal(detail.ledger.length,4);
   f.sqlite.close();
 });
 
@@ -257,6 +314,147 @@ test('invalid work quantities and duplicate IDs do not create charges',async()=>
   assert.throws(()=>f.sqlite.prepare('UPDATE ledger SET credits=100').run(),/immutable/);
   assert.throws(()=>f.sqlite.prepare('UPDATE tasks SET credits=8').run(),/immutable/);
   f.sqlite.close();
+});
+
+function invoiceStripe() {
+  const records=new Map(), keys=new Map(), calls=[];
+  const once=(key,make)=>{if(!keys.has(key))keys.set(key,make());return structuredClone(keys.get(key));};
+  const stripe={records,calls,failFinalize:false,
+    customers:{async create(params,options){calls.push(['customer',params]);return once(options.idempotencyKey,()=>({id:`cus_${keys.size}`}));}},
+    invoices:{
+      async list({customer}){return {data:[...records.values()].filter(invoice=>invoice.customer===customer).map(invoice=>structuredClone(invoice))};},
+      async create(params,options){calls.push(['invoice',params]);return once(options.idempotencyKey,()=>{
+        const invoice={...params,id:`in_${records.size}`,livemode:false,status:'draft',subtotal:0,total:0,amount_paid:0,amount_remaining:0,lines:{has_more:false,data:[]}};
+        records.set(invoice.id,invoice);return invoice;
+      });},
+      async retrieve(id){return structuredClone(records.get(id));},
+      async finalizeInvoice(id,params){calls.push(['finalize',params]);if(stripe.failFinalize)throw new Error('Stripe temporarily unavailable');const invoice=records.get(id);invoice.status='open';invoice.number='TEST-0001';invoice.hosted_invoice_url='https://invoice.stripe.com/i/test';return structuredClone(invoice);},
+      async voidInvoice(id){const invoice=records.get(id);invoice.status='void';return structuredClone(invoice);},
+    },
+    invoiceItems:{async create(params,options){return once(options.idempotencyKey,()=>{const invoice=records.get(params.invoice);invoice.lines.data.push({amount:params.amount});invoice.subtotal+=params.amount;invoice.total+=params.amount;invoice.amount_remaining=invoice.total;return {id:'ii_test'};});}},
+  };
+  return stripe;
+}
+async function overdueFixture() {
+  const f=fixture(), clientId=await f.client();
+  f.at('2025-01-15T12:00:00.000Z'); await f.fund(clientId);
+  const task=f.work(24); await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  f.at('2025-02-05T12:00:00.000Z');
+  const draft={id:crypto.randomUUID(),period:'2025-01',email:contact.email,credits:8};
+  return {...f,clientId,task,draft};
+}
+
+test('month-end drafts use server-calculated closed-period debt, reject duplicates and enforce staff access',async()=>{
+  const f=await overdueFixture(), {clientId,draft}=f;
+  const path=`/clients/${clientId}/invoices`;
+  assert.deepEqual(await billingPreview(f.DB,clientId,draft.period),{period:'2025-01',cutoff:'2025-02-01T00:00:00.000Z',credits:8,amountCents:60000});
+  assert.equal((await f.call(contact,path,'POST',draft)).status,403);
+  assert.equal((await f.call(outsider,path,'POST',draft)).status,404);
+  assert.equal((await f.call(contact,`/clients/${clientId}/billing?period=2025-01`)).status,403);
+  assert.equal((await f.call(staff,path,'POST',{...draft,credits:9})).status,409);
+  assert.equal((await f.call(staff,path,'POST',{...draft,period:new Date().toISOString().slice(0,7)})).status,400);
+  assert.equal((await f.call(staff,path,'POST',draft)).status,200);
+  assert.equal((await f.call(staff,path,'POST',draft)).data.invoices.length,1);
+  assert.equal((await f.call(staff,path,'POST',{...draft,id:crypto.randomUUID()})).status,409);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.invoices.length,0);
+  assert.equal((await f.call(staff,`/clients/${clientId}`)).data.balance,-8);
+  assert.equal((await f.call(contact,`${path}/${draft.id}/issue`,'POST')).status,403);
+  assert.equal((await f.call(outsider,`${path}/${draft.id}/refresh`,'POST')).status,404);
+  f.sqlite.close();
+});
+
+test('issuing transfers debt exactly once; invoice payment clears that debt without awarding credits twice',async()=>{
+  const f=await overdueFixture(), {clientId,draft}=f, stripe=invoiceStripe();
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',draft);
+  await Promise.all([issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe),issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe)]);
+  let detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,0); assert.equal(detail.invoiced_credits,8); assert.equal(detail.invoices[0].status,'open');
+  assert.equal(detail.ledger.filter(entry=>entry.kind==='billing').length,1);
+  assert.equal(stripe.records.size,1); assert.equal([...stripe.records.values()][0].lines.data.length,1);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,0);
+  assert.equal(stripe.calls.find(([kind])=>kind==='invoice')[1].collection_method,'send_invoice');
+  assert.equal(stripe.calls.find(([kind])=>kind==='invoice')[1].auto_advance,false);
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',f.work(4));
+  const invoice=[...stripe.records.values()][0]; invoice.status='paid';invoice.amount_paid=60000;invoice.amount_remaining=0;
+  await Promise.all([refreshInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe),fulfillInvoiceEvent(testStripeEnv,f.DB,invoice.id,stripe)]);
+  await refreshInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,-4); assert.equal(detail.invoiced_credits,0); assert.equal(detail.invoices[0].status,'paid');
+  assert.equal(detail.ledger.filter(entry=>entry.kind==='billing').length,1);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,4);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,0);
+  f.sqlite.close();
+});
+
+test('top-ups cover old overages; later work and cancellations cannot revive already covered month-end debt',async()=>{
+  const f=await overdueFixture(), {clientId,draft}=f;
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',draft);
+  const newer=f.work(4);await f.call(staff,`/clients/${clientId}/tasks`,'POST',newer);
+  await f.call(staff,`/clients/${clientId}/tasks/${newer.id}`,'PATCH',{id:crypto.randomUUID(),status:'cancelled',note:'Cancelled newer work.'});
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,8);
+  assert.equal((await f.fund(clientId,'pi_laterTopup',16)).status,200);
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',f.work(20));
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,-12);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,12);
+  const stripe=invoiceStripe();
+  await assert.rejects(issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe),/outstanding credits changed/);
+  assert.equal(stripe.records.size,0);
+  f.sqlite.close();
+});
+
+test('Stripe failures resume a reserved invoice without re-transferring credits; invalid settlements fail closed',async()=>{
+  const f=await overdueFixture(), {clientId,draft}=f, stripe=invoiceStripe();
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',draft);
+  stripe.failFinalize=true;
+  await assert.rejects(issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe),/temporarily unavailable/);
+  assert.equal((await f.call(staff,`/clients/${clientId}`)).data.invoices[0].status,'issuing');
+  stripe.failFinalize=false;
+  await issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  assert.equal(stripe.records.size,1);
+  const invoice=[...stripe.records.values()][0];
+  for (const override of [{livemode:true},{total:1},{metadata:{}},{status:'paid',amount_paid:1}]) {
+    const original=structuredClone(invoice);Object.assign(invoice,override);
+    await assert.rejects(refreshInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe));
+    for(const name of Object.keys(invoice))delete invoice[name];Object.assign(invoice,original);
+  }
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.invoiced_credits,8);
+  f.sqlite.close();
+});
+
+test('voiding an unpaid bill restores unbilled debt once; cancelling billed work and its invoice leaves no debt',async()=>{
+  const f=await overdueFixture(), {clientId,draft,task}=f, stripe=invoiceStripe();
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',draft);
+  await issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  await voidInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  await voidInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  let detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,-8);assert.equal(detail.invoiced_credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,8);
+  const next={...draft,id:crypto.randomUUID()};
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',next);
+  await issueInvoice(testStripeEnv,f.DB,clientId,next.id,stripe);
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',{id:crypto.randomUUID(),status:'cancelled',note:'Cancelled agreed work.'});
+  await voidInvoice(testStripeEnv,f.DB,clientId,next.id,stripe);
+  detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,16);assert.equal(detail.invoiced_credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,0);
+  f.sqlite.close();
+});
+
+test('overage migration preserves existing client IDs, credits, work, members, attachments, and immutable ledger rows',async()=>{
+  const db=new DatabaseSync(':memory:');
+  for(const name of ['0001_portal.sql','0002_attachments.sql'])db.exec(readFileSync(new URL(`../backend/migrations/${name}`,import.meta.url),'utf8'));
+  db.exec("INSERT INTO clients(id,name) VALUES('client','Existing'); INSERT INTO client_members VALUES('client','a@example.com'); INSERT INTO ledger(id,client_id,kind,credits,note,created_by,actor_email) VALUES('fund','client','purchase',16,'Paid','staff','a@example.com'); INSERT INTO tasks(id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email) VALUES('work','client','Existing task','Work','A','email',4,'completed','staff','a@example.com'); INSERT INTO attachments(id,task_id,name,content_type,size,sha256,created_by,actor_email) VALUES('file','work','test.txt','text/plain',1,'hash','staff','a@example.com');");
+  const before=db.prepare('SELECT * FROM ledger ORDER BY rowid').all();
+  db.exec('BEGIN');db.exec(readFileSync(new URL('../backend/migrations/0003_overage_billing.sql',import.meta.url),'utf8'));db.exec('COMMIT');
+  assert.equal(db.prepare('SELECT balance FROM clients').get().balance,12);
+  assert.deepEqual(db.prepare('SELECT * FROM ledger ORDER BY rowid').all(),before);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM client_members').get().n,1);
+  assert.equal(db.prepare('SELECT task_id FROM attachments').get().task_id,'work');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+  assert.throws(()=>db.prepare('UPDATE ledger SET credits=50').run(),/immutable/);
+  db.close();
 });
 
 test('worker allows only configured browser origins and never caches private responses',async()=>{

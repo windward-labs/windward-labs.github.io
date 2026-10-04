@@ -47,6 +47,11 @@ export async function handleAttachment(request,env,db,actor,clientId,taskId,atta
       'Cache-Control':'no-store',
     }});
   }
+  const updateId=new URL(request.url).searchParams.get('update');
+  if (updateId!==null) {
+    id(updateId);
+    if (!await query(db,'SELECT id FROM task_updates WHERE id=? AND task_id=?',updateId,taskId).first()) throw new PortalError(404,'Progress update not found.');
+  }
   let name;
   try { name = decodeURIComponent(request.headers.get('X-File-Name') || ''); }
   catch { throw new PortalError(400,'Invalid file name.'); }
@@ -59,12 +64,12 @@ export async function handleAttachment(request,env,db,actor,clientId,taskId,atta
   const sha256 = Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
   // Reserve the ID and slot before storing bytes. Retries must contain the same
   // file; a failed R2 upload can resume without charging for the task again.
-  await query(db,`INSERT INTO attachments (id,task_id,name,content_type,size,sha256,created_by,actor_email)
-    SELECT ?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM attachments WHERE task_id=?) < 5
-    ON CONFLICT(id) DO NOTHING`,attachmentId,taskId,name,contentType,bytes.byteLength,sha256,actor.id,actor.email,taskId).run();
+  await query(db,`INSERT INTO attachments (id,task_id,name,content_type,size,sha256,created_by,actor_email,update_id)
+    SELECT ?,?,?,?,?,?,?,?,? WHERE (SELECT count(*) FROM attachments WHERE task_id=? AND update_id IS ?) < 5
+    ON CONFLICT(id) DO NOTHING`,attachmentId,taskId,name,contentType,bytes.byteLength,sha256,actor.id,actor.email,updateId,taskId,updateId).run();
   const attachment = await query(db,'SELECT * FROM attachments WHERE id=?',attachmentId).first();
-  if (!attachment) throw new PortalError(409,'Each work record can have up to 5 attachments.');
-  if (attachment.task_id !== taskId || attachment.name !== name || attachment.size !== bytes.byteLength || attachment.content_type !== contentType || attachment.sha256 !== sha256) throw new PortalError(409,'Attachment ID already used for a different file.');
+  if (!attachment) throw new PortalError(409,'Each work record or progress update can have up to 5 attachments.');
+  if (attachment.task_id !== taskId || attachment.update_id !== updateId || attachment.name !== name || attachment.size !== bytes.byteLength || attachment.content_type !== contentType || attachment.sha256 !== sha256) throw new PortalError(409,'Attachment ID already used for a different file or update.');
   if (!attachment.ready) {
     await env.ATTACHMENTS.put(key(clientId,taskId,attachmentId),bytes,{httpMetadata:{contentType}});
     await query(db,'UPDATE attachments SET ready=1 WHERE id=?',attachmentId).run();

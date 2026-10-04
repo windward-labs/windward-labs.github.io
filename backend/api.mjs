@@ -1,6 +1,7 @@
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
 import { handleAttachment } from './attachments.mjs';
+import { invoicedCreditsSql, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const query = (db, sql, ...values) => db.prepare(sql).bind(...values);
@@ -20,14 +21,16 @@ async function clientAccess(db, actor, clientId) {
 async function detail(db, actor, clientId) {
   // Read authorization and data in a single primary database session.
   const client = await clientAccess(db,actor,clientId);
-  const [members,tasks,updates,ledger,attachments] = await db.batch([
+  const [members,tasks,updates,ledger,attachments,invoices,balances] = await db.batch([
     query(db,'SELECT email FROM client_members WHERE client_id = ? ORDER BY email',clientId),
     query(db,'SELECT * FROM tasks WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
     query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY u.created_at DESC, u.id',clientId),
     query(db,'SELECT * FROM ledger WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
-    query(db,'SELECT a.id,a.task_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
+    query(db,'SELECT a.id,a.task_id,a.update_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
+    query(db,`SELECT id,period,email,credits,amount_cents,status,hosted_invoice_url,number,created_at FROM invoices WHERE client_id=? ${actor.staff ? '' : 'AND stripe_invoice_id IS NOT NULL'} ORDER BY created_at DESC,id`,clientId),
+    query(db,`SELECT c.balance,${invoicedCreditsSql} AS invoiced_credits FROM clients c WHERE c.id=?`,clientId),
   ]);
-  return { ...client, members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results };
+  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results };
 }
 
 // authenticate is dependency-injected in tests; production always uses Privy.
@@ -41,8 +44,8 @@ export async function handleApi(request, env, authenticate) {
       ['test','live'].includes(env.STRIPE_MODE) && !!env.STRIPE_SECRET_KEY?.startsWith(env.STRIPE_MODE==='live' ? 'sk_live_' : 'sk_test_')});
     if (path === '/v1/clients' && method === 'GET') {
       const result = await (actor.staff
-        ? query(db,`SELECT c.*, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c ORDER BY c.name`)
-        : query(db,`SELECT c.*, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c JOIN client_members m ON m.client_id=c.id WHERE m.email=? ORDER BY c.name`,actor.email)).all();
+        ? query(db,`SELECT c.*,${invoicedCreditsSql} AS invoiced_credits, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c ORDER BY c.name`)
+        : query(db,`SELECT c.*,${invoicedCreditsSql} AS invoiced_credits, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c JOIN client_members m ON m.client_id=c.id WHERE m.email=? ORDER BY c.name`,actor.email)).all();
       return json({clients: result.results});
     }
     if (path === '/v1/clients' && method === 'POST') {
@@ -63,6 +66,25 @@ export async function handleApi(request, env, authenticate) {
       const clientId = id(attachmentRoute[1]);
       await clientAccess(db,actor,clientId);
       return await handleAttachment(request,env,db,actor,clientId,attachmentRoute[2],attachmentRoute[3]);
+    }
+    const billingRoute=path.match(/^\/v1\/clients\/([^/]+)\/(billing|invoices)(?:\/([^/]+)\/(issue|refresh|void))?$/);
+    if (billingRoute) {
+      const clientId=id(billingRoute[1]);
+      await clientAccess(db,actor,clientId);
+      const resource=billingRoute[2], invoiceId=billingRoute[3], action=billingRoute[4];
+      if (resource==='billing' && method==='GET' && !invoiceId) {
+        requireStaff(actor);
+        return json(await billingPreview(db,clientId,new URL(request.url).searchParams.get('period')));
+      }
+      if (resource==='invoices' && method==='POST') {
+        if (action!=='refresh') requireStaff(actor);
+        if (!invoiceId) await createInvoiceDraft(env,db,actor,clientId,await bodyOf(request));
+        else if (action==='issue') await issueInvoice(env,db,clientId,invoiceId);
+        else if (action==='refresh') await refreshInvoice(env,db,clientId,invoiceId);
+        else if (action==='void') await voidInvoice(env,db,clientId,invoiceId);
+        return json(await detail(db,actor,clientId));
+      }
+      throw new PortalError(405,'Method not allowed.');
     }
     const route = path.match(/^\/v1\/clients\/([^/]+)(?:\/(members|purchases|tasks|checkout)(?:\/([^/]+))?)?$/);
     if (!route) throw new PortalError(404,'Not found.');
@@ -120,7 +142,7 @@ export async function handleApi(request, env, authenticate) {
     return json(await detail(db,actor,clientId));
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
-    if (/CHECK constraint failed.*balance/i.test(String(error))) return json({error:'Not enough credits. Confirm a top-up before recording this work.'},409);
+    if (/UNIQUE constraint failed: invoices.client_id, invoices.period/i.test(String(error))) return json({error:'This month already has an invoice. Open the existing bill before creating another.'},409);
     if (/UNIQUE constraint/i.test(String(error))) return json({error:'This record or payment reference already exists. Refresh before trying again.'},409);
     console.error('Portal request failed',error instanceof Error ? error.name : 'Unknown error');
     return json({error:'Unable to complete this request. Please try again.'},500);

@@ -62,6 +62,11 @@ export async function handleStripeWebhook(request,env) {
       const db = env.DB.withSession ? env.DB.withSession('first-primary') : env.DB;
       await fulfillCheckout(env,db,event.data.object.id,undefined,stripe);
     }
+    if (['invoice.paid','invoice.voided'].includes(event.type)) {
+      const {fulfillInvoiceEvent}=await import('./billing.mjs');
+      const db=env.DB.withSession ? env.DB.withSession('first-primary') : env.DB;
+      await fulfillInvoiceEvent(env,db,event.data.object.id,stripe);
+    }
     return Response.json({received:true},{headers});
   } catch(error) {
     return Response.json({error:error instanceof PortalError ? error.message : 'Unable to process Stripe event.'},{status:error instanceof PortalError ? error.status : 500,headers});

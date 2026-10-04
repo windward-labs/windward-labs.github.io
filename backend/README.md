@@ -74,7 +74,8 @@ Stripe's test card reference: https://docs.stripe.com/testing
 For production, set Cloudflare secrets `STRIPE_SECRET_KEY` and
 `STRIPE_WEBHOOK_SECRET`, and the variable `STRIPE_MODE=live`. Configure a Stripe
 live webhook for `checkout.session.completed` and
-`checkout.session.async_payment_succeeded` at
+`checkout.session.async_payment_succeeded`, plus `invoice.paid` and
+`invoice.voided`, at
 `https://windward-service-api.windwardlabs.workers.dev/v1/stripe/webhook`.
 After deploying the updated frontend/backend, change each live Payment Link's
 After payment redirect to
@@ -101,7 +102,8 @@ automatic payment confirmation is configured.
   operation; neither can credit the same PaymentIntent twice.
 - A work record deducts its credits immediately, including queued work. Updating
   progress never deducts again. Cancellation returns the charge once and closes
-  the record. The database rejects overdrafts and keeps immutable ledger entries.
+  the record. Work can exceed prepaid credits; the portal shows credits owed
+  and the form warns staff before submission. Ledger entries remain immutable.
 - Descriptions, progress notes, and payment verification notes are visible to
   clients. Keep internal discussion outside these fields.
 
@@ -129,6 +131,53 @@ page.
 The website and live Stripe integration are deployed. Create clients through the
 staff dashboard after signing in.
 
+## Staff-reviewed month-end billing
+
+The account balance can go negative. `credits owed` combines unbilled negative
+credits and unpaid issued invoices. Staff use **Month-end billing** to select a
+completed month (UTC), review its remaining overage at $75 per credit, enter a
+billing email, and create a draft. Only staff can create, approve, or void bills.
+Drafts are visible only to staff and do not change credits or contact Stripe.
+
+**Approve & issue invoice** reserves the reviewed debt atomically, transfers it
+from the prepaid balance into an unpaid invoice, and creates a Stripe invoice
+with a 30-day payment term. Automatic collection and email are disabled. Staff
+copy the hosted payment link and share it through their existing channel; clients
+can also pay issued invoices from the portal. There is no scheduled invoice job.
+
+Before an invoice is issued, top-ups cover unbilled overages. After issuing, its
+debt is separate: top-ups buy credits and the invoice is paid through its own
+link. Payment verification marks the invoice paid without crediting the account
+again. Signed `invoice.paid`/`invoice.voided` webhooks and the portal refresh
+button verify the current Stripe invoice against the recorded amount, client,
+invoice ID, and test/live environment. Returning to the portal tab refreshes
+open invoice statuses as well.
+
+A unique active invoice per client/month prevents duplicate billing. Billing
+uses the highest running credit balance since the selected month ended, so
+later work cannot revive old debt cleared by a top-up. The approval step rejects
+a draft whose credits have already been covered. If Stripe fails, the bill stays
+in **Preparing invoice**; **Retry issuing invoice** resumes its stored Stripe IDs
+and idempotency keys without moving credits twice. Voiding an unpaid bill returns
+its credits to the unbilled balance; paid invoices cannot be voided here.
+
+Invoices currently use a fixed USD total at $75/credit without automatic Stripe
+Tax; review billing details before issuing. Existing Payment Link purchases keep
+their tax configuration.
+
+Deploy `0003_overage_billing.sql` before the Worker update, then run
+`node backend/provision-stripe-live.mjs --events-only` to add the invoice webhook events.
+Restart `npm run dev:stripe` locally to forward those events. To verify Stripe
+integration without real payments or emails, run:
+
+```sh
+node backend/verify-test-billing.mjs
+```
+
+The verification requires `STRIPE_MODE=test` and a test key in `.dev.vars`. It
+creates an isolated test invoice with an in-memory database and simulates a
+full test settlement. It never modifies the local or production D1 database.
+
 ## Work hours and attachments
 
 Staff enter work time in 15-minute increments. The form shows the deduction at
@@ -149,7 +198,8 @@ the migrations with `npm run db:migrate:local`; Wrangler uses local R2 storage
 without connecting to the production bucket.
 
 Staff can attach up to five nonempty files of up to 10 MiB each when recording
-work. D1 stores file metadata and R2 stores the bytes. Uploads and downloads use
+work and separately on each progress update. Files appear under the description
+or update they belong to. D1 stores file metadata and R2 stores the bytes. Uploads and downloads use
 `/v1/clients/:clientId/tasks/:taskId/attachments/:attachmentId`, authenticated
 through Privy. Downloads recheck current client membership and force files to
 download instead of serving executable content inline. Do not enable public
@@ -159,6 +209,9 @@ Work is saved before its attachments. If an upload fails, the form retains its
 record and file IDs so submitting again resumes the uploads without another
 credit deduction. Only completed uploads appear in the work detail. Reserved
 file IDs cannot be reused with different contents.
+Progress uploads add `?update=:updateId` to the upload endpoint. The server
+requires that update to belong to the same task and client. Failed uploads can
+be retried even on a cancellation update without duplicating its refund.
 
 For a new environment, provision a separate database instead of recreating the
 existing production database:
@@ -189,9 +242,10 @@ Avoid publishing a build that uses the local `.env.local` API URL.
 
 `npm test` uses Node 22's SQLite engine to exercise the same migrations, database
 triggers, and API handlers as D1. Tests cover account isolation, staff-only writes,
-revoked access, purchase and work retries, duplicate references, overdrafts,
+revoked access, purchase and work retries, duplicate references, overages,
 progress updates, refunds, private attachment access, file limits, and failed
-upload retries. `npm run typecheck` checks the frontend, and
+upload retries, month-end bill review, duplicate invoice prevention, and invoice
+settlement/voiding. `npm run typecheck` checks the frontend, and
 `npm run build` verifies the static site.
 
 Before launch, sign in once with a Windward email and once with an approved client

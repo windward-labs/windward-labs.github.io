@@ -5,7 +5,7 @@ import { readLocalEnv,localEnvPath } from './local-env.mjs';
 const env = readLocalEnv();
 if (env.STRIPE_MODE!=='test' || !env.STRIPE_SECRET_KEY?.startsWith('sk_test_')) throw new Error('A local Stripe test key is required.');
 const cli = new URL('../node_modules/.bin/stripe',import.meta.url);
-const child = spawn(cli.pathname,['listen','--events','checkout.session.completed,checkout.session.async_payment_succeeded','--forward-to','http://localhost:8787/v1/stripe/webhook','--color','off'],{
+const child = spawn(cli.pathname,['listen','--events','checkout.session.completed,checkout.session.async_payment_succeeded,invoice.paid,invoice.voided','--forward-to','http://localhost:8787/v1/stripe/webhook','--color','off'],{
   env:{...process.env,STRIPE_API_KEY:env.STRIPE_SECRET_KEY,STRIPE_DEVICE_NAME:'windward-local'},stdio:['ignore','pipe','pipe'],
 });
 let buffered='';
