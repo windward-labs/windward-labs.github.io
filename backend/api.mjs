@@ -1,5 +1,6 @@
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
+import { handleAttachment } from './attachments.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const query = (db, sql, ...values) => db.prepare(sql).bind(...values);
@@ -19,13 +20,14 @@ async function clientAccess(db, actor, clientId) {
 async function detail(db, actor, clientId) {
   // Read authorization and data in a single primary database session.
   const client = await clientAccess(db,actor,clientId);
-  const [members,tasks,updates,ledger] = await db.batch([
+  const [members,tasks,updates,ledger,attachments] = await db.batch([
     query(db,'SELECT email FROM client_members WHERE client_id = ? ORDER BY email',clientId),
     query(db,'SELECT * FROM tasks WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
     query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY u.created_at DESC, u.id',clientId),
     query(db,'SELECT * FROM ledger WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
+    query(db,'SELECT a.id,a.task_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
   ]);
-  return { ...client, members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results };
+  return { ...client, members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results };
 }
 
 // authenticate is dependency-injected in tests; production always uses Privy.
@@ -55,6 +57,12 @@ export async function handleApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const attachmentRoute = path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/attachments\/([^/]+)$/);
+    if (attachmentRoute) {
+      const clientId = id(attachmentRoute[1]);
+      await clientAccess(db,actor,clientId);
+      return await handleAttachment(request,env,db,actor,clientId,attachmentRoute[2],attachmentRoute[3]);
     }
     const route = path.match(/^\/v1\/clients\/([^/]+)(?:\/(members|purchases|tasks|checkout)(?:\/([^/]+))?)?$/);
     if (!route) throw new PortalError(404,'Not found.');

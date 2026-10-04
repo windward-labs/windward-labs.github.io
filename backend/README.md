@@ -114,6 +114,8 @@ The production backend was provisioned on 2026-10-03:
 - Initial schema applied; `PRIVY_APP_SECRET` stored as a Worker secret.
 - GitHub Actions variables `PUBLIC_PRIVY_APP_ID` and `PUBLIC_SERVICE_API_URL` set.
 - The published API rejects unauthenticated requests with HTTP 401.
+- Private R2 bucket `windward-service-attachments` and the attachment metadata
+  migration were provisioned on 2026-10-04. Public `r2.dev` access is disabled.
 
 For production Stripe provisioning, save only the live key in the ignored file
 `backend/.dev.vars.production` as `STRIPE_SECRET_KEY=sk_live_…`. Run
@@ -124,9 +126,39 @@ Cloudflare. Deploy the Worker, merge and deploy the frontend, then run
 the deployed return page. This order avoids redirecting buyers to an unfinished
 page.
 
-The website changes still need to be deployed, followed by live staff/client
-sign-in verification. The database starts empty; create clients through the staff
-dashboard after signing in. No R2 bucket or attachment endpoints are configured yet.
+The website and live Stripe integration are deployed. Create clients through the
+staff dashboard after signing in.
+
+## Work hours and attachments
+
+Staff enter work time in 15-minute increments. The form shows the deduction at
+the normal rate of 4 credits per hour before submitting; the API retains its
+whole-credit ledger and idempotent work charges.
+
+Attachments use the private `windward-service-attachments` R2 bucket bound as
+`ATTACHMENTS`. Enable R2 in the Cloudflare account first, then provision and deploy:
+
+```sh
+npx wrangler r2 bucket create windward-service-attachments --config backend/wrangler.jsonc
+npx wrangler d1 migrations apply windward-service --remote --config backend/wrangler.jsonc
+npx wrangler deploy --config backend/wrangler.jsonc
+```
+
+Deploy the backend before publishing the frontend. For local development, apply
+the migrations with `npm run db:migrate:local`; Wrangler uses local R2 storage
+without connecting to the production bucket.
+
+Staff can attach up to five nonempty files of up to 10 MiB each when recording
+work. D1 stores file metadata and R2 stores the bytes. Uploads and downloads use
+`/v1/clients/:clientId/tasks/:taskId/attachments/:attachmentId`, authenticated
+through Privy. Downloads recheck current client membership and force files to
+download instead of serving executable content inline. Do not enable public
+bucket access.
+
+Work is saved before its attachments. If an upload fails, the form retains its
+record and file IDs so submitting again resumes the uploads without another
+credit deduction. Only completed uploads appear in the work detail. Reserved
+file IDs cannot be reused with different contents.
 
 For a new environment, provision a separate database instead of recreating the
 existing production database:
@@ -155,10 +187,11 @@ Avoid publishing a build that uses the local `.env.local` API URL.
 
 ## Verification
 
-`npm test` uses Node 22's SQLite engine to exercise the same migration, database
+`npm test` uses Node 22's SQLite engine to exercise the same migrations, database
 triggers, and API handlers as D1. Tests cover account isolation, staff-only writes,
 revoked access, purchase and work retries, duplicate references, overdrafts,
-progress updates, and refunds. `npm run typecheck` checks the frontend, and
+progress updates, refunds, private attachment access, file limits, and failed
+upload retries. `npm run typecheck` checks the frontend, and
 `npm run build` verifies the static site.
 
 Before launch, sign in once with a Windward email and once with an approved client

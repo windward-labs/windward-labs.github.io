@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
-import { creditPacks, formatPrice } from '../pricing.mjs';
+import { creditPacks, formatPrice, normalCreditsPerHour } from '../pricing.mjs';
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
 import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus } from './types';
 
 const statusNames: Record<WorkStatus, string> = { queued: 'Queued', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const date = (value: string) => new Intl.DateTimeFormat('en-US', { month:'short', day:'numeric', year:'numeric' }).format(new Date(value));
 const clientUrl = (id: string) => `/service/client/?id=${encodeURIComponent(id)}`;
-type Api = <T>(path: string, method?: string, body?: unknown) => Promise<T>;
+type Api = <T>(path: string, method?: string, body?: unknown, responseType?: 'json' | 'blob') => Promise<T>;
 
 export default function Portal() {
   const appId = import.meta.env.PUBLIC_PRIVY_APP_ID;
@@ -30,15 +30,18 @@ function AuthenticatedPortal() {
   const paymentReturn = params.get('payment') === 'returned';
   const selectedId = params.get('id') || params.get('client') || (paymentReturn ? params.get('utm_content') : null);
   const checkoutOnly = window.location.pathname.replace(/\/$/,'') === '/service/checkout';
-  const api: Api = useCallback(async (path, method = 'GET', body) => {
+  const api: Api = useCallback(async (path, method = 'GET', body, responseType = 'json') => {
     if (!apiUrl) throw new Error('The portal is being set up. Please contact Windward for account access.');
     if (import.meta.env.DEV && !isLocalApi(apiUrl)) throw new Error('Local testing requires a local service API. Set PUBLIC_SERVICE_API_URL=http://localhost:8787.');
     const token = await getAccessToken();
     if (!token) throw new Error('Your session expired. Please sign in again.');
-    const response = await fetch(`${apiUrl}/v1${path}`, { method, headers:{ Authorization:`Bearer ${token}`, ...(body ? {'Content-Type':'application/json'} : {}) }, ...(body ? {body:JSON.stringify(body)} : {}) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || 'Unable to load your account. Please try again.');
-    return data;
+    const file = body instanceof File ? body : null;
+    const response = await fetch(`${apiUrl}/v1${path}`, { method, headers:{ Authorization:`Bearer ${token}`, ...(file ? {'Content-Type':file.type || 'application/octet-stream','X-File-Name':encodeURIComponent(file.name)} : body ? {'Content-Type':'application/json'} : {}) }, ...(body ? {body:file || JSON.stringify(body)} : {}) });
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Unable to load your account. Please try again.');
+    }
+    return responseType === 'blob' ? response.blob() : response.json();
   },[apiUrl,getAccessToken]);
   useEffect(() => {
     let active = true;
@@ -106,6 +109,11 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
 function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{actor:Actor; client:ClientDetail; api:Api; setClient:(client:ClientDetail)=>void; checkoutOnly:boolean; paymentReturn:boolean}) {
   const [checkout,setCheckout] = useState(checkoutOnly);
   const [copyStatus,setCopyStatus] = useState('');
+  const [workHours,setWorkHours] = useState('');
+  const [workFiles,setWorkFiles] = useState<{id:string;file:File}[]>([]);
+  const [fileError,setFileError] = useState('');
+  const workCredits = Number(workHours) * normalCreditsPerHour;
+  const validWorkHours = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
   return <>
@@ -132,12 +140,36 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
       <section className="section"><div className="row section-title"><h2>Work & progress</h2><span className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</span></div>
-        {!client.tasks.length ? <p className="muted">No work recorded yet. Requests made through email, text, or other channels will appear here once the team records them.</p> : <div className="portal-tasks">{client.tasks.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} mutate={mutate}/>)}</div>}
+        {!client.tasks.length ? <p className="muted">No work recorded yet. Requests made through email, text, or other channels will appear here once the team records them.</p> : <div className="portal-tasks">{client.tasks.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} mutate={mutate} api={api}/>)}</div>}
       </section>
-      {actor.staff && <section className="section"><h2 className="portal-heading">Record work</h2><MutationForm label="Submit" submit={async(form,id)=>mutate('tasks','POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:Number(form.get('credits')),status:form.get('status')})}>
+      {actor.staff && <section className="section"><h2 className="portal-heading">Record work</h2><MutationForm label="Submit" submit={async(form,id)=>{
+        if (fileError) throw new Error(fileError);
+        const credits = Number(form.get('hours')) * normalCreditsPerHour;
+        if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500.');
+        await mutate('tasks','POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits,status:form.get('status')});
+        try {
+          for (const {id:attachmentId,file} of workFiles) await api(`/clients/${client.id}/tasks/${id}/attachments/${attachmentId}`,'POST',file);
+        } catch (error) {
+          setClient(await api<ClientDetail>(`/clients/${client.id}`));
+          throw new Error(`Work was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Submit again to retry the attachments; credits will not be deducted again.`);
+        }
+        if (workFiles.length) setClient(await api<ClientDetail>(`/clients/${client.id}`));
+        setWorkFiles([]);
+        setWorkHours('');
+      }}>
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the agreed work. This is visible to the client."/></label>
+        <label>Attachments<input name="attachments" type="file" multiple aria-describedby="work-attachments-help" onChange={event=>{
+          const files = Array.from(event.target.files || []);
+          const error = files.length > 5 ? 'Choose up to 5 attachments.' : files.some(file=>file.size > 10 * 1024 * 1024 || file.size === 0) ? 'Each attachment must be nonempty and 10 MB or smaller.' : files.some(file=>file.name.length > 255) ? 'File names must be 255 characters or shorter.' : '';
+          setFileError(error);
+          setWorkFiles(error ? [] : files.map(file=>({id:crypto.randomUUID(),file})));
+        }}/></label>
+        <p id="work-attachments-help" className="caption muted">Up to 5 files, 10 MB each. Visible to this client’s approved emails and Windward staff.</p>
+        {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
-        <div className="fields"><Field label="Credits to deduct" name="credits" type="number" min={1} max={10000} step={1}/><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
+        <div className="fields"><label>Hours of work<input name="hours" type="number" required min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)} aria-describedby="work-hours-rate work-credit-conversion"/></label><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
+        <p id="work-hours-rate" className="caption muted">1 hour = {normalCreditsPerHour} credits at normal delivery. Log time in 15-minute increments (0.25 hours).</p>
+        <p id="work-credit-conversion"><output aria-live="polite">{validWorkHours ? `${workHours} ${Number(workHours) === 1 ? 'hour' : 'hours'} = ${workCredits} ${workCredits === 1 ? 'credit' : 'credits'} to deduct` : workHours ? 'Enter time in 0.25-hour increments.' : 'Enter hours to see the credits to deduct.'}</output></p>
         <p className="caption muted">Deducted once when recorded. Progress updates do not deduct more credits. Cancelling work returns its credits.</p>
       </MutationForm></section>}
       <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table aria-label="Credit purchases, work charges, and refunds"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
@@ -191,9 +223,22 @@ function PaymentReturn({client,api,setClient}:{client:ClientDetail;api:Api;setCl
   </section>;
 }
 
-function TaskView({task,client,staff,mutate}:{task:Task; client:ClientDetail; staff:boolean; mutate:(resource:string,method:string,body:unknown)=>Promise<void>}) {
+function TaskView({task,client,staff,mutate,api}:{task:Task; client:ClientDetail; staff:boolean; mutate:(resource:string,method:string,body:unknown)=>Promise<void>;api:Api}) {
   const updates = client.updates.filter(update=>update.task_id===task.id);
+  const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
+  const [downloading,setDownloading] = useState('');
+  const [downloadError,setDownloadError] = useState('');
   return <details className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><span className="caption muted">{statusNames[task.status]} · {task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></summary><div className="stack details-body"><p className="portal-description">{task.description}</p><p className="caption muted">Requested by {task.requested_by} · {task.source} · {date(task.created_at)}</p>
+    {attachments.length > 0 && <div className="stack"><h3>Attachments</h3><ul className="portal-attachments">{attachments.map(attachment=><li key={attachment.id}><button type="button" className="plain-button" disabled={!!downloading} onClick={async()=>{
+      setDownloading(attachment.id); setDownloadError('');
+      try {
+        const blob = await api<Blob>(`/clients/${client.id}/tasks/${task.id}/attachments/${attachment.id}`,'GET',undefined,'blob');
+        const url = URL.createObjectURL(blob), link = document.createElement('a');
+        link.href=url; link.download=attachment.name; document.body.appendChild(link); link.click(); link.remove();
+        window.setTimeout(()=>URL.revokeObjectURL(url),60000);
+      } catch(error) { setDownloadError(error instanceof Error ? error.message : 'Unable to download this attachment.'); }
+      finally { setDownloading(''); }
+    }}>{downloading === attachment.id ? 'Downloading…' : attachment.name}</button><span className="caption muted">{attachment.size < 1024 * 1024 ? `${Math.max(1,Math.ceil(attachment.size / 1024))} KB` : `${(attachment.size / (1024 * 1024)).toFixed(1)} MB`}</span></li>)}</ul>{downloadError && <p role="alert">{downloadError}</p>}</div>}
     {updates.length > 0 && <ol className="portal-updates">{updates.map(update=><li key={update.id}><p>{update.note}</p><p className="caption muted">{statusNames[update.status]} · {date(update.created_at)}</p></li>)}</ol>}
     {staff && task.status !== 'cancelled' && <MutationForm label="Save progress" submit={async(form,id)=>mutate(`tasks/${task.id}`,'PATCH',{id,status:form.get('status'),note:form.get('note')})}><label>Status<select name="status" defaultValue={task.status}>{Object.entries(statusNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Progress note<textarea name="note" rows={3} required maxLength={2000} placeholder="Visible to the client"/></label><p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p></MutationForm>}
   </div></details>;

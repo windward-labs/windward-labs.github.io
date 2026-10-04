@@ -19,5 +19,6 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [{"binding":"ATTACHMENTS","bucket_name":"windward-service-attachments"}],
   "account_id": "2fe64b98adb85ae1a593cfcc07deb389"
 }

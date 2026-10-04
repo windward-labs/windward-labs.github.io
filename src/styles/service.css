@@ -126,6 +126,9 @@
 .portal-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
 .portal-form { margin-top: 16px; }
 .portal-form label { margin-bottom: 0; }
+.portal-attachments { list-style: none; padding: 0; margin: 0; }
+.portal-attachments li { display: flex; align-items: baseline; gap: 12px; margin: 8px 0; }
+.portal-attachments button { overflow-wrap: anywhere; text-align: left; }
 .portal-form input, .portal-form textarea, .portal-form select, .portal-checkout select { margin-top: 8px; font-weight: 400; }
 .portal-task { border-bottom: 1px solid var(--color-border); padding: 24px 0; }
 .portal-task:first-child { padding-top: 0; }

@@ -8,13 +8,15 @@ import { isStaffEmail, PortalError } from '../backend/domain.mjs';
 import worker from '../backend/worker.mjs';
 import Stripe from 'stripe';
 import { fulfillCheckout, handleStripeWebhook } from '../backend/stripe.mjs';
+import { maxAttachmentBytes } from '../backend/attachments.mjs';
 
 const staff = {id:'did:privy:staff',email:'phil@windwardlabs.xyz',staff:true};
 const contact = {id:'did:privy:client',email:'alex@example.com',staff:false};
 const outsider = {id:'did:privy:other',email:'other@example.com',staff:false};
-function fixture() {
+function fixture(extraEnv = {}) {
   const sqlite = new DatabaseSync(':memory:');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0001_portal.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0002_attachments.sql',import.meta.url),'utf8'));
   const wrap = (sql,values=[]) => ({
     bind(...args) { return wrap(sql,args); },
     async first() { return sqlite.prepare(sql).get(...values) ?? null; },
@@ -27,7 +29,7 @@ function fixture() {
     catch(error) { sqlite.exec('ROLLBACK'); throw error; }
   }};
   async function call(actor,path,method='GET',body) {
-    const response = await handleApi(new Request(`https://api.example.com/v1${path}`,{method,...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})}),{DB},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
+    const response = await handleApi(new Request(`https://api.example.com/v1${path}`,{method,...(body?{headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}:{})}),{DB,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
     return {status:response.status,data:await response.json()};
   }
   async function client() {
@@ -37,8 +39,74 @@ function fixture() {
   }
   async function fund(id,reference='pi_payment1',credits=16) { return call(staff,`/clients/${id}/purchases`,'POST',{credits,reference,note:'Confirmed successful payment in Stripe'}); }
   function work(credits=4) { return {id:crypto.randomUUID(),title:'Review onboarding',description:'Review the flow requested by email.',requestedBy:contact.email,source:'email',credits,status:'in_progress'}; }
-  return {sqlite,DB,call,client,fund,work};
+  async function file(actor,clientId,taskId,attachmentId,method='POST',bytes='file contents',headers={}) {
+    return handleApi(new Request(`https://api.example.com/v1/clients/${clientId}/tasks/${taskId}/attachments/${attachmentId}`,{method,...(method==='POST'?{body:bytes,headers:{'X-File-Name':encodeURIComponent('design résumé.png'),'Content-Type':'image/png',...headers}}:{})}),{DB,...extraEnv},async()=>{ if (!actor) throw new PortalError(401,'Sign in.'); return actor; });
+  }
+  return {sqlite,DB,call,client,fund,work,file};
 }
+
+function attachmentStorage() {
+  const objects = new Map();
+  return {objects,async put(key,bytes) { objects.set(key,bytes.slice()); },async get(key) { const bytes=objects.get(key); return bytes ? {body:bytes} : null; }};
+}
+
+test('attachments require staff uploads and current client membership for private downloads',async()=>{
+  const bucket=attachmentStorage(), f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), otherId=await f.client(), task=f.work(), attachmentId=crypto.randomUUID();
+  await f.fund(clientId); await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal((await f.file(null,clientId,task.id,attachmentId)).status,401);
+  assert.equal((await f.file(contact,clientId,task.id,attachmentId)).status,403);
+  assert.equal((await f.file(outsider,clientId,task.id,attachmentId)).status,404);
+  assert.equal((await f.file(staff,otherId,task.id,attachmentId)).status,404);
+  assert.equal(bucket.objects.size,0);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId)).status,200);
+  const detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,12); assert.equal(detail.attachments.length,1);
+  assert.equal(detail.attachments[0].name,'design résumé.png');
+  const downloaded=await f.file(contact,clientId,task.id,attachmentId,'GET');
+  assert.equal(downloaded.status,200); assert.equal(await downloaded.text(),'file contents');
+  assert.equal(downloaded.headers.get('Cache-Control'),'no-store');
+  assert.equal(downloaded.headers.get('Content-Type'),'application/octet-stream');
+  assert.equal(downloaded.headers.get('X-Content-Type-Options'),'nosniff');
+  assert.match(downloaded.headers.get('Content-Disposition'),/^attachment;.*r%C3%A9sum%C3%A9/);
+  assert.equal((await f.file(outsider,clientId,task.id,attachmentId,'GET')).status,404);
+  assert.equal((await f.file(staff,otherId,task.id,attachmentId,'GET')).status,404);
+  await f.call(staff,`/clients/${clientId}/members`,'DELETE',{email:contact.email});
+  assert.equal((await f.file(contact,clientId,task.id,attachmentId,'GET')).status,404);
+  f.sqlite.close();
+});
+
+test('attachment retries resume storage failures without duplicate files or charges and reject changed bytes',async()=>{
+  const bucket=attachmentStorage(), put=bucket.put;
+  bucket.put=async()=>{throw new Error('Storage temporarily unavailable');};
+  const f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), task=f.work(), attachmentId=crypto.randomUUID();
+  await f.fund(clientId); await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId)).status,500);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.attachments.length,0);
+  assert.equal((await f.file(contact,clientId,task.id,attachmentId,'GET')).status,404);
+  bucket.put=put;
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId)).status,200);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId)).status,200);
+  assert.equal((await f.file(staff,clientId,task.id,attachmentId,'POST','different file')).status,409);
+  const detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,12); assert.equal(detail.attachments.length,1); assert.equal(bucket.objects.size,1);
+  f.sqlite.close();
+});
+
+test('attachment limits reject empty and oversized streams and cap concurrent uploads at five',async()=>{
+  const bucket=attachmentStorage(), f=fixture({ATTACHMENTS:bucket}), clientId=await f.client(), task=f.work();
+  await f.fund(clientId); await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal((await f.file(staff,clientId,task.id,crypto.randomUUID(),'POST','')).status,400);
+  assert.equal((await f.file(staff,clientId,task.id,crypto.randomUUID(),'POST',new Uint8Array(maxAttachmentBytes+1))).status,413);
+  assert.equal((await f.file(staff,clientId,task.id,crypto.randomUUID(),'POST','small',{'Content-Length':String(maxAttachmentBytes+1)})).status,413);
+  assert.equal((await f.file(staff,clientId,task.id,crypto.randomUUID(),'POST','small',{'X-File-Name':'bad%0Aname'})).status,400);
+  assert.equal(bucket.objects.size,0);
+  const responses=await Promise.all(Array.from({length:6},()=>f.file(staff,clientId,task.id,crypto.randomUUID())));
+  assert.deepEqual(responses.map(response=>response.status).sort(),[200,200,200,200,200,409]);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.attachments.length,5);
+  assert.equal(bucket.objects.size,5);
+  f.sqlite.close();
+});
 
 function paidSession(clientId) {
   return {id:'cs_test_purchase',livemode:false,mode:'payment',payment_link:'plink_test',client_reference_id:clientId,
