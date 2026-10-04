@@ -348,17 +348,33 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
   return <section id="portal-credit-checkout" className="section stack portal-checkout">
     <h2>Add credits</h2>
     {testMode && <p role="status">Stripe test mode · No real money is charged. Credits are recorded in the local database.</p>}
-    <label>Credit pack<select value={credits} aria-describedby="credit-pack-description" onChange={event=>setCredits(Number(event.target.value) as 16 | 32 | 64)}>{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.name} · {pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label>
-    <div id="credit-pack-description" aria-live="polite">
-      <p>{pack.description}</p>
-      <p className="caption muted">{pack.hours} hours of work at normal delivery. Fast delivery uses more credits.</p>
+    <p className="muted">1 credit is 15 minutes of work at normal delivery.</p>
+    <div className="portal-checkout-layout">
+      <fieldset className="portal-pack-options"><legend className="portal-pack-legend">Choose a credit pack</legend>{[...creditPacks].reverse().map(option=>{
+        const savings = option.credits * creditPriceCents - option.amountCents;
+        const lastPurchase = client.ledger.find(entry=>entry.kind==='purchase');
+        return <label key={option.credits} className={`portal-pack ${credits===option.credits ? 'portal-pack-selected' : ''}`}>
+          <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 16 | 32 | 64)}/>
+          <span className="portal-pack-content">
+            <span className="row portal-pack-heading"><span>{option.name}</span><span>{formatPrice(option.amountCents)}</span></span>
+            <span className="muted">{option.credits} credits · {formatPrice(option.amountCents / option.credits)} per credit{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
+            <span className="muted">{option.description}</span>
+            <span className="caption muted">{option.hours} hours at normal delivery</span>
+            {lastPurchase?.credits===option.credits && <span className="portal-pack-badge caption">You bought this last time</span>}
+          </span>
+        </label>;
+      })}</fieldset>
+      <div className="stack portal-order-summary" aria-live="polite" aria-atomic="true">
+        <h3>Order summary</h3>
+        <div className="row"><span>{pack.name} · {pack.credits} credits</span><span>{formatPrice(pack.amountCents)}</span></div>
+        <div className="row portal-checkout-balance"><span>Balance after</span><span>{client.balance<0 ? `${-client.balance} owed` : `${client.balance} available`} → {client.balance+credits<0 ? `${-(client.balance+credits)} owed` : `${client.balance+credits} available`}</span></div>
+        <p className="caption muted">One-time purchase · USD. Applicable tax is shown at checkout. Fast delivery uses more credits.</p>
+        {client.balance<0 && <p className="caption muted">Purchased credits first cover your {-client.balance} unbilled credits owed.</p>}
+        {!!client.invoiced_credits && <p className="caption muted">Issued invoices are paid separately using their payment links.</p>}
+        <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
+        <p className="caption muted">{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</p>
+      </div>
     </div>
-    <div className="row"><span>Subtotal · USD</span><output aria-live="polite">{formatPrice(pack.amountCents)}</output></div>
-    <p className="caption muted">$75 per credit · One-time purchase. Applicable tax is shown at checkout.</p>
-    {client.balance<0 && <p className="caption muted">Purchased credits first cover your {Math.max(0,-client.balance)} unbilled credits owed.</p>}
-    {!!client.invoiced_credits && <p className="caption muted">Issued invoices are paid separately using their payment links. Buying credits does not pay an issued invoice.</p>}
-    <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
-    <p className="caption muted">{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</p>
   </section>;
 }
 
