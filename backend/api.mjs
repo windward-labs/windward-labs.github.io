@@ -1,5 +1,6 @@
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
+import { paymentDocument } from './payment-documents.mjs';
 import { handleAttachment } from './attachments.mjs';
 import { invoicedCreditsSql, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
 
@@ -60,6 +61,13 @@ export async function handleApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const documentRoute=path.match(/^\/v1\/clients\/([^/]+)\/activity\/([^/]+)\/document$/);
+    if (documentRoute) {
+      const clientId=id(documentRoute[1]);
+      await clientAccess(db,actor,clientId);
+      if (method!=='GET') throw new PortalError(405,'Method not allowed.');
+      return await paymentDocument(env,db,clientId,decodeURIComponent(documentRoute[2]));
     }
     const attachmentRoute = path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/attachments\/([^/]+)$/);
     if (attachmentRoute) {

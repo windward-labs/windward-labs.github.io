@@ -101,11 +101,11 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
     return ()=>{ document.removeEventListener('pointerdown',dismiss); document.removeEventListener('keydown',escape); };
   },[open]);
   return <div ref={container} className="portal-session" onBlur={event=>{ if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
-    <button ref={trigger} type="button" className="plain-button portal-account-trigger" title={email} aria-expanded={open} aria-controls="portal-account-popover" onClick={()=>setOpen(value=>!value)}>
-      <span>{email}</span>
+    <button ref={trigger} type="button" className="plain-button portal-account-trigger" aria-label="Windward Labs account menu" aria-expanded={open} aria-controls="portal-account-popover" onClick={()=>setOpen(value=>!value)}>
+      <span>Windward Labs</span>
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
     </button>
-    {open && <div id="portal-account-popover" className="portal-account-popover"><button ref={signOut} type="button" className="portal-sign-out" onClick={()=>{ setOpen(false); onSignOut(); }}>Sign out</button></div>}
+    {open && <div id="portal-account-popover" className="portal-account-popover"><div className="portal-account-info"><p className="caption muted">Signed in as</p><p>{email}</p></div><a className="portal-menu-link" href="/">Windward Labs website</a><button ref={signOut} type="button" className="portal-sign-out" onClick={()=>{ setOpen(false); onSignOut(); }}>Sign out</button></div>}
   </div>;
 }
 
@@ -116,6 +116,8 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const [workHours,setWorkHours] = useState('');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
   const [fileError,setFileError] = useState('');
+  const activeProjects = client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress');
+  const completedProjects = client.tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
   const workCredits = Number(workHours) * normalCreditsPerHour;
   const validWorkHours = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
@@ -144,7 +146,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
-      <section className="section"><div className="row section-title"><div><h2>Work & progress</h2><p className="caption muted">{client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress').length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>New Project</button>}</div></div>
+      <section className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-expanded={showWorkForm} aria-controls="record-work-form" onClick={()=>setShowWorkForm(value=>!value)}>New Project</button>}</div></div>
       {actor.staff && <div id="record-work-form" className="portal-work-form" hidden={!showWorkForm}><MutationForm label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
@@ -168,10 +170,11 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
         <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
       </MutationForm></div>}
-        {!client.tasks.length ? <p className="muted">No work recorded yet. Requests made through email, text, or other channels will appear here once the team records them.</p> : <div className="portal-tasks">{client.tasks.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} mutate={mutate} api={api} setClient={setClient}/>)}</div>}
+        {!activeProjects.length ? <div className="portal-empty-state"><span className="portal-empty-icon" aria-hidden="true">＋</span><h3>No active projects yet</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div>}
       </section>
+      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
-      <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Credit activity</h2>{client.ledger.length ? <div className="table-scroll"><table aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date</th><th>Activity</th><th>Credits</th></tr></thead><tbody>{client.ledger.map(entry=><tr key={entry.id}><td>{date(entry.created_at)}</td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
         {!actor.automaticPayments && <section className="section"><h2 className="portal-heading">Confirm credit purchase</h2><MutationForm label="Add confirmed credits" submit={async(form)=>mutate('purchases','POST',{credits:Number(form.get('credits')),reference:form.get('reference'),note:form.get('note')})}>
           <label>Credit pack<select name="credits">{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label><Field label="Stripe PaymentIntent ID" name="reference" maxLength={200} placeholder="pi_…"/><Field label="Verification note" name="note" maxLength={2000} placeholder="Payment confirmed in Stripe"/>
@@ -282,27 +285,27 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
   }}/></label><p id={helpId} className="caption muted">Up to 5 files, 10 MB each. Visible to this client’s approved emails and Windward staff.</p></>;
 }
 
-function TaskView({task,client,staff,mutate,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; mutate:(resource:string,method:string,body:unknown)=>Promise<void>;api:Api;setClient:(client:ClientDetail)=>void}) {
+function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void}) {
   const updates = client.updates.filter(update=>update.task_id===task.id);
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const [files,setFiles]=useState<PendingFile[]>([]);
   const [fileError,setFileError]=useState('');
   const [pendingUpdate,setPendingUpdate]=useState('');
-  return <details className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><span className="caption muted">{statusNames[task.status]} · {task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></summary><div className="stack details-body"><p className="portal-description">{task.description}</p><p className="caption muted">Requested by {task.requested_by} · {task.source} · {date(task.created_at)}</p>
+  const [expanded,setExpanded]=useState(false);
+  return <details onToggle={event=>setExpanded(event.currentTarget.open)} className={`portal-task ${task.status==='completed'?'portal-task-completed':''}`}><summary><span>{task.title}</span><span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'muted'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span></summary><div className="stack details-body">{expanded && <ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/>}<p className="portal-description">{task.description}</p>
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
-    {updates.length>0 && <ol className="portal-updates">{updates.map(update=><li key={update.id} className="stack"><p>{update.note}</p><p className="caption muted">{statusNames[update.status]} · {date(update.created_at)}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===update.id)} clientId={client.id} taskId={task.id} api={api}/></li>)}</ol>}
+    <div className="stack"><h3>Activity</h3><ol className="portal-timeline"><li><div className="row"><strong>Project recorded</strong><time className="caption muted" dateTime={task.created_at}>{date(task.created_at)}</time></div><p className="caption muted">Requested by {task.requested_by} via {task.source}</p></li>{[...updates].reverse().map(update=><li key={update.id}><div className="row"><strong>{statusNames[update.status]}</strong><time className="caption muted" dateTime={update.created_at}>{date(update.created_at)}</time></div><p className="portal-description">{update.note}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===update.id)} clientId={client.id} taskId={task.id} api={api}/></li>)}</ol></div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
       if (fileError) throw new Error(fileError);
-      // Keep the cancellation form mounted until all its attachments are saved.
+      // Publish the new status after uploads so moving sections preserves retry state.
       setPendingUpdate(id);
-      await mutate(`tasks/${task.id}`,'PATCH',{id,status:form.get('status'),note:form.get('note')});
+      const updatedClient = await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}`,'PATCH',{id,status:form.get('status'),note:form.get('note')});
       try {
         for (const {id:attachmentId,file} of files) await api(`/clients/${client.id}/tasks/${task.id}/attachments/${attachmentId}?update=${encodeURIComponent(id)}`,'POST',file);
       } catch(error) {
-        setClient(await api<ClientDetail>(`/clients/${client.id}`));
         throw new Error(`Progress was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Save progress again to retry; the update and any refund will not be duplicated.`);
       }
-      if (files.length) setClient(await api<ClientDetail>(`/clients/${client.id}`));
+      setClient(files.length ? await api<ClientDetail>(`/clients/${client.id}`) : updatedClient);
       setFiles([]); setPendingUpdate('');
     }}><label>Status<select name="status" defaultValue={task.status}>{Object.entries(statusNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Progress note<textarea name="note" rows={3} required maxLength={2000} placeholder="Visible to the client"/></label>
       <AttachmentPicker helpId={`progress-attachments-${task.id}`} filesChanged={setFiles} errorChanged={setFileError}/>
@@ -310,6 +313,23 @@ function TaskView({task,client,staff,mutate,api,setClient}:{task:Task; client:Cl
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div></details>;
+}
+
+function ProjectVisuals({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {
+  const images=attachments.filter(file=>/\.(png|jpe?g|webp|gif|avif)$/i.test(file.name));
+  return images.length ? <div className="portal-project-visuals">{images.map(file=><ProjectImage key={file.id} file={file} clientId={clientId} taskId={taskId} api={api}/>)}</div> : null;
+}
+function ProjectImage({file,clientId,taskId,api}:{file:Attachment;clientId:string;taskId:string;api:Api}) {
+  const [url,setUrl]=useState(''), [failed,setFailed]=useState(false);
+  useEffect(()=>{
+    let active=true, objectUrl='';
+    void api<Blob>(`/clients/${clientId}/tasks/${taskId}/attachments/${file.id}`,'GET',undefined,'blob').then(blob=>{
+      if (!active) return;
+      objectUrl=URL.createObjectURL(blob); setUrl(objectUrl);
+    }).catch(()=>{if(active)setFailed(true);});
+    return ()=>{active=false; if(objectUrl)URL.revokeObjectURL(objectUrl);};
+  },[api,clientId,taskId,file.id]);
+  return <figure>{url && !failed ? <a href={url} download={file.name}><img src={url} alt={file.name} onError={()=>setFailed(true)}/></a> : <div className="portal-image-placeholder caption muted">{failed ? 'Preview unavailable' : 'Loading image…'}</div>}<figcaption className="caption muted">{file.name}</figcaption></figure>;
 }
 
 function AttachmentList({attachments,clientId,taskId,api}:{attachments:Attachment[];clientId:string;taskId:string;api:Api}) {
@@ -376,6 +396,20 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
       </div>
     </div>
   </section>;
+}
+
+function PaymentDocument({clientId,entryId,purchase,api}:{clientId:string;entryId:string;purchase:boolean;api:Api}) {
+  const [busy,setBusy]=useState(false), [error,setError]=useState('');
+  return <div className="portal-payment-document"><button type="button" className="portal-download-link caption" disabled={busy} onClick={async()=>{
+    setBusy(true);setError('');
+    try {
+      const blob=await api<Blob>(`/clients/${clientId}/activity/${encodeURIComponent(entryId)}/document`,'GET',undefined,'blob');
+      const url=URL.createObjectURL(blob), link=document.createElement('a');
+      link.href=url; link.download=purchase ? 'payment-document.pdf' : 'invoice.pdf'; link.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    } catch(error) {setError(error instanceof Error ? error.message : 'Unable to download the document.');}
+    finally {setBusy(false);}
+  }}>{busy ? 'Downloading…' : purchase ? 'Download invoice / receipt' : 'Download invoice'}</button>{error && <p className="caption" role="alert">{error}</p>}</div>;
 }
 
 function Field({label,...props}:{label:string;name:string;type?:string;maxLength?:number;placeholder?:string;min?:number;max?:number;step?:number}) { return <label>{label}<input {...props} required /></label>; }

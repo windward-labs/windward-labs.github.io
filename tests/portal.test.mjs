@@ -8,6 +8,8 @@ import { isStaffEmail, PortalError } from '../backend/domain.mjs';
 import worker from '../backend/worker.mjs';
 import Stripe from 'stripe';
 import { fulfillCheckout, handleStripeWebhook } from '../backend/stripe.mjs';
+import { paymentDocument } from '../backend/payment-documents.mjs';
+import { PDFDocument } from 'pdf-lib';
 import { maxAttachmentBytes } from '../backend/attachments.mjs';
 import { billingPreview, issueInvoice, refreshInvoice, voidInvoice, fulfillInvoiceEvent } from '../backend/billing.mjs';
 
@@ -467,4 +469,43 @@ test('worker allows only configured browser origins and never caches private res
   assert.equal(unauthorized.status,401);
   assert.equal(unauthorized.headers.get('Access-Control-Allow-Origin'),'https://windwardlabs.xyz');
   assert.equal(unauthorized.headers.get('Cache-Control'),'no-store');
+});
+
+
+test('payment documents enforce current account access and use verified Stripe data',async()=>{
+  const f=fixture(), clientId=await f.client(), otherId=await f.client();
+  await f.fund(clientId);
+  const entry=(await f.call(contact,`/clients/${clientId}`)).data.ledger[0];
+  const path=`/clients/${clientId}/activity/${encodeURIComponent(entry.id)}/document`;
+  assert.equal((await f.call(null,path)).status,401);
+  assert.equal((await f.call(outsider,path)).status,404);
+  const session={client_reference_id:clientId,livemode:false,payment_status:'paid',amount_subtotal:120000,invoice:null};
+  const stripe={checkout:{sessions:{list:async({payment_intent})=>{assert.equal(payment_intent,entry.reference);return {data:[session],has_more:false};}}},paymentIntents:{retrieve:async(reference)=>({id:reference,livemode:false,status:'succeeded',currency:'usd',amount_received:120000,created:1750000000})}};
+  const response=await paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe);
+  assert.equal(response.headers.get('Content-Type'),'application/pdf');
+  assert.equal(response.headers.get('Cache-Control'),'no-store');
+  const pdf=await PDFDocument.load(await response.arrayBuffer());
+  assert.equal(pdf.getTitle(),'Windward Labs payment receipt'); assert.equal(pdf.getPageCount(),1);
+  await assert.rejects(paymentDocument(testStripeEnv,f.DB,otherId,entry.id,stripe),/Payment not found/);
+  session.client_reference_id=otherId;
+  await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe),/Payment not found/);
+  session.client_reference_id=clientId;session.livemode=true;
+  await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe),/Payment not found/);
+  await f.call(staff,`/clients/${clientId}/members`,'DELETE',{email:contact.email});
+  assert.equal((await f.call(contact,path)).status,404);
+});
+
+test('existing purchase invoice PDFs are downloaded without creating another invoice',async()=>{
+  const f=fixture(), clientId=await f.client(); await f.fund(clientId);
+  const entry=(await f.call(contact,`/clients/${clientId}`)).data.ledger[0];
+  const invoice={id:'in_existing',livemode:false,invoice_pdf:'https://pay.stripe.com/invoice/example/pdf'};
+  const stripe={checkout:{sessions:{list:async()=>({data:[{client_reference_id:clientId,livemode:false,payment_status:'paid',amount_subtotal:120000,invoice:invoice.id}],has_more:false})}},invoices:{retrieve:async()=>invoice}};
+  const response=await paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe,async(url)=>{assert.equal(url,invoice.invoice_pdf);return new Response('%PDF-existing',{headers:{'Content-Type':'application/pdf'}});});
+  assert.equal(await response.text(),'%PDF-existing');
+  let fetches=0;
+  const redirected=await paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe,async()=>++fetches===1 ? new Response(null,{status:302,headers:{Location:'https://stripe-upload-api.s3.us-west-1.amazonaws.com/example'}}) : new Response('%PDF-redirected',{headers:{'Content-Type':'application/octet-stream'}}));
+  assert.equal(await redirected.text(),'%PDF-redirected');assert.equal(fetches,2);
+  await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe,async()=>new Response(null,{status:302,headers:{Location:'https://attacker.example/pdf'}})),/Invalid invoice download URL/);
+  invoice.invoice_pdf='https://stripe.com.attacker.example/pdf';
+  await assert.rejects(paymentDocument(testStripeEnv,f.DB,clientId,entry.id,stripe),/Invalid invoice download URL/);
 });
