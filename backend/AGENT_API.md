@@ -38,6 +38,22 @@ curl --fail-with-body "$WINDWARD_API_BASE_URL/clients" \
 These examples assume secrets are already loaded into the process environment.
 Do not use `curl -v` or shell tracing with credentials.
 
+For Python runtimes, transfer the original credential file securely and run:
+
+```sh
+python3 backend/verify-agent.py /private/path/to/james.env
+```
+
+The token is exactly 80 characters and contains letters, digits, underscores and
+hyphens. It has no `$` suffix. Copy only the value after `WINDWARD_API_TOKEN=`;
+do not use the variable name or a token-validation regular expression as the
+credential. The checker reads the file directly, without shell expansion, and
+prints no token. It reports identity on success, or HTTP status and Cloudflare
+diagnostic headers on failure. Share that diagnostic output when troubleshooting.
+An API JSON `Invalid agent API key` response means the token format was rejected;
+a non-JSON Cloudflare error needs its status/error code/Ray ID and runtime network
+details before deciding what to change.
+
 ## Routes
 
 Paths below are relative to the base URL. `client`, `project`, `update`,
@@ -53,6 +69,7 @@ Paths below are relative to the base URL. `client`, `project`, `update`,
 | `DELETE /clients/{client}/members` | `{email}`; revokes client access |
 | `POST /clients/{client}/tasks` | New project; fields below |
 | `POST /clients/{client}/tasks/{project}/updates` | Progress note; fields below |
+| `PATCH /clients/{client}/tasks/{project}/updates/{update}` | `{occurredAt}`; correct an existing update's event date |
 | `PATCH /clients/{client}/tasks/{project}` | Same progress-note body, retained for the dashboard |
 | `POST /clients/{client}/tasks/{project}/attachments/{attachment}` | Raw file bytes; headers below |
 | `GET /clients/{client}/tasks/{project}/attachments/{attachment}` | Private file download |
@@ -107,6 +124,7 @@ impersonate someone else.
   "id": "a freshly generated UUID saved before the request",
   "note": "The onboarding screens are ready for review.",
   "status": "in_progress",
+  "occurredAt": "2026-09-28T15:22:00-07:00",
   "source": {
     "type": "email",
     "id": "the mailbox's stable message ID",
@@ -118,6 +136,20 @@ impersonate someone else.
 Send to `POST /clients/{client}/tasks/{project}/updates`. Omit `status` to leave
 the project's current status unchanged. Allowed statuses are `queued`,
 `in_progress`, `completed`, `cancelled`. Cancelled projects cannot be reopened.
+Set `occurredAt` to the email's timestamp, including its timezone (ISO 8601).
+The API returns it as `occurred_at` in UTC; the project timeline displays and
+sorts by this event time. `created_at` remains the server ingestion timestamp.
+If omitted, the timeline uses ingestion time as before. Dates without a timezone,
+invalid calendar dates, and conflicting dates on an existing update return an
+error. Preserve the same date on retry. Use `occurredAt`, not `createdAt` or
+`date`. Backdating a note does not backdate credit charges or monthly invoices.
+For historical emails, omit `status` unless you intend to change the current
+project status as well.
+To backdate a note already imported, use the individual update PATCH route with
+only `{ "occurredAt": "2026-09-28T15:22:00-07:00" }`. This changes its display
+date without changing its note, status, ingestion time, files or credits.
+Date corrections retain the previous/new date and staff actor in an audit table;
+repeating the same correction does not create a second date-change record.
 `source` is optional. Its type is `email`, `text`, `meeting`, or `other`; `id`
 must be stable, up to 500 characters. `url` is optional and must be HTTPS without
 embedded credentials. Do not include access tokens in source URLs.

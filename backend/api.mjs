@@ -1,4 +1,4 @@
-import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput } from './domain.mjs';
+import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput,eventTimestamp } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
 import {authorizeAgent,requireAgentScope} from './agent-auth.mjs';
 import { paymentDocument } from './payment-documents.mjs';
@@ -26,7 +26,7 @@ async function detail(db, actor, clientId) {
   const [members,tasks,updates,ledger,attachments,invoices,balances,sources] = await db.batch([
     query(db,'SELECT email FROM client_members WHERE client_id = ? ORDER BY email',clientId),
     query(db,'SELECT * FROM tasks WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
-    query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY u.created_at DESC, u.id',clientId),
+    query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY COALESCE(u.occurred_at,u.created_at) DESC, u.created_at DESC, u.id',clientId),
     query(db,'SELECT * FROM ledger WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
     query(db,'SELECT a.id,a.task_id,a.update_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
     query(db,`SELECT id,period,email,credits,amount_cents,status,hosted_invoice_url,number,created_at FROM invoices WHERE client_id=? ${actor.staff ? '' : 'AND stripe_invoice_id IS NOT NULL'} ORDER BY created_at DESC,id`,clientId),
@@ -39,7 +39,9 @@ async function detail(db, actor, clientId) {
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
   const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
   if(!task)throw new PortalError(404,'Work not found.');
+  if(body.createdAt!==undefined || body.date!==undefined)throw new PortalError(400,'Use occurredAt for the email date; created_at is the server audit timestamp.');
   const update=statusInput({...body,status:body.status ?? task.status});
+  const occurredAt=body.occurredAt===undefined ? null : eventTimestamp(body.occurredAt);
   if(update.status==='cancelled')requireAgentScope(actor,'projects:cancel');
   let source=null;
   if(body.source!==undefined) {
@@ -55,12 +57,12 @@ async function addProjectUpdate(db,actor,clientId,taskId,body) {
   if(!existing && source)existing=await query(db,'SELECT u.* FROM task_updates u JOIN update_sources s ON s.update_id=u.id WHERE s.task_id=? AND s.source_type=? AND s.external_id=?',taskId,source.type,source.id).first();
   if(existing) {
     const savedSource=await query(db,'SELECT * FROM update_sources WHERE update_id=?',existing.id).first();
-    if(existing.task_id!==taskId || existing.note!==update.note || (body.status!==undefined && existing.status!==update.status) || (source ? savedSource?.source_type!==source.type || savedSource?.external_id!==source.id || savedSource?.source_url!==source.url : !!savedSource))throw new PortalError(409,'Update ID or message reference already used.');
+    if(existing.task_id!==taskId || existing.note!==update.note || (body.status!==undefined && existing.status!==update.status) || (occurredAt!==null && (existing.occurred_at ?? existing.created_at)!==occurredAt) || (source ? savedSource?.source_type!==source.type || savedSource?.external_id!==source.id || savedSource?.source_url!==source.url : !!savedSource))throw new PortalError(409,'Update ID or message reference already used.');
     return;
   }
   if(task.status==='cancelled')throw new PortalError(409,'Cancelled work cannot be changed.');
   const statements=[
-    query(db,`INSERT INTO task_updates (id,task_id,status,note,created_by,actor_email) SELECT ?,id,?,?,?,? FROM tasks WHERE id=? AND client_id=? AND status!='cancelled'`,update.id,update.status,update.note,actor.id,actor.email,taskId,clientId),
+    query(db,`INSERT INTO task_updates (id,task_id,status,note,created_by,actor_email,occurred_at) SELECT ?,id,?,?,?,?,? FROM tasks WHERE id=? AND client_id=? AND status!='cancelled'`,update.id,update.status,update.note,actor.id,actor.email,occurredAt,taskId,clientId),
     query(db,`UPDATE tasks SET status=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=?,updated_actor_email=? WHERE id=? AND client_id=? AND status!='cancelled'`,update.status,actor.id,actor.email,taskId,clientId),
   ];
   if(source)statements.push(query(db,`INSERT INTO update_sources (update_id,task_id,source_type,external_id,source_url) SELECT id,task_id,?,?,? FROM task_updates WHERE id=? AND task_id=?`,source.type,source.id,source.url,update.id,taskId));
@@ -113,6 +115,22 @@ async function handleAuthorizedApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const dateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates\/([^/]+)$/);
+    if(dateRoute) {
+      if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
+      requireStaff(actor);
+      const clientId=id(dateRoute[1]),taskId=id(dateRoute[2]),updateId=id(dateRoute[3]);
+      await clientAccess(db,actor,clientId);
+      if(!await query(db,'SELECT 1 FROM task_updates u JOIN tasks t ON t.id=u.task_id WHERE u.id=? AND t.id=? AND t.client_id=?',updateId,taskId,clientId).first())throw new PortalError(404,'Progress update not found.');
+      const body=await bodyOf(request);
+      if(Object.keys(body).some(key=>key!=='occurredAt'))throw new PortalError(400,'This endpoint only changes occurredAt.');
+      const occurredAt=eventTimestamp(body.occurredAt);
+      await db.batch([
+        query(db,`INSERT INTO update_date_changes (id,update_id,previous_date,occurred_at,created_by,actor_email) SELECT ?,id,COALESCE(occurred_at,created_at),?,?,? FROM task_updates WHERE id=? AND COALESCE(occurred_at,created_at)!=?`,crypto.randomUUID(),occurredAt,actor.id,actor.email,updateId,occurredAt),
+        query(db,'UPDATE task_updates SET occurred_at=? WHERE id=?',occurredAt,updateId),
+      ]);
+      return json(await detail(db,actor,clientId));
     }
     const updateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates$/);
     if(updateRoute) {

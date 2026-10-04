@@ -153,7 +153,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
       <section id="active-projects" className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="record-work-form" onClick={()=>{setWorkSuccess(null);setShowWorkForm(true);}}>New Project</button>}</div></div>
-      {workSuccess && <div className="portal-project-success" role="status"><strong>✓ Project created</strong><p>{workSuccess.credits} credits deducted · {Math.abs(workSuccess.balance)} credits {workSuccess.balance<0 ? 'owed' : 'available'}</p><a href={`/service/project/?client=${encodeURIComponent(client.id)}&project=${encodeURIComponent(workSuccess.id)}`}>View project</a></div>}
+      {workSuccess && <ProjectCreatedToast clientId={client.id} success={workSuccess} onDismiss={()=>setWorkSuccess(null)}/>}
       {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
@@ -170,7 +170,6 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         setWorkFiles([]);setWorkHours('');
         setWorkSuccess({id,credits,balance:savedClient.balance});
         setShowWorkForm(false);setWorkFormRevision(value=>value+1);
-        requestAnimationFrame(()=>document.getElementById('active-projects')?.scrollIntoView({behavior:'smooth',block:'start'}));
       }}>
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
@@ -325,6 +324,23 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
 function TaskStatus({task}:{task:Task}) {
   return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'muted'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
 }
+function ProjectCreatedToast({clientId,success,onDismiss}:{clientId:string;success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
+  const [hovered,setHovered]=useState(false);
+  const [focused,setFocused]=useState(false);
+  const paused=hovered || focused;
+  const dismiss=useRef(onDismiss);
+  dismiss.current=onDismiss;
+  useEffect(()=>{
+    if(paused)return;
+    const timer=window.setTimeout(()=>dismiss.current(),8000);
+    return ()=>window.clearTimeout(timer);
+  },[success.id,paused]);
+  return createPortal(<div className="portal-project-toast" onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)} onFocus={()=>setFocused(true)} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))setFocused(false);}}>
+    <div role="status"><strong>✓ Project created</strong><p>{success.credits} credits deducted · {Math.abs(success.balance)} credits {success.balance<0 ? 'owed' : 'available'}</p></div>
+    <a href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(success.id)}`}>View project</a>
+    <button type="button" className="portal-toast-dismiss" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
+  </div>,document.body);
+}
 function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:ClientDetail;projectId:string;api:Api;setClient:(client:ClientDetail)=>void}) {
   const task=client.tasks.find(task=>task.id===projectId);
   const target=document.getElementById('service-credit-action');
@@ -333,6 +349,7 @@ function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:
 
 function TaskView({task,client,staff,api,setClient,standalone=false}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void;standalone?:boolean}) {
   const updates = client.updates.filter(update=>update.task_id===task.id);
+  const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const [files,setFiles]=useState<PendingFile[]>([]);
   const [fileError,setFileError]=useState('');
@@ -340,7 +357,7 @@ function TaskView({task,client,staff,api,setClient,standalone=false}:{task:Task;
   const [expanded,setExpanded]=useState(false);
   const body = <div className="stack details-body">{(expanded || standalone) && <ProjectVisuals attachments={attachments} clientId={client.id} taskId={task.id} api={api}/>}<p className="portal-description">{task.description}</p>
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
-    <div className="stack"><h3>Activity</h3><ol className="portal-timeline"><li><div className="row"><strong>Project recorded</strong><time className="caption muted" dateTime={task.created_at}>{date(task.created_at)}</time></div><p className="caption muted">Requested by {task.requested_by} via {task.source}</p></li>{[...updates].reverse().map(update=><li key={update.id}><div className="row"><strong>{statusNames[update.status]}</strong><time className="caption muted" dateTime={update.created_at}>{date(update.created_at)}</time></div><p className="portal-description">{update.note}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===update.id)} clientId={client.id} taskId={task.id} api={api}/></li>)}</ol></div>
+    <div className="stack"><h3>Activity</h3><ol className="portal-timeline">{timeline.map(item=><li key={item.id}><div className="row"><strong>{item.update ? statusNames[item.update.status] : 'Project recorded'}</strong><time className="caption muted" dateTime={item.at}>{date(item.at)}</time></div>{item.update ? <><p className="portal-description">{item.update.note}</p><AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol></div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
       if (fileError) throw new Error(fileError);
       // Publish the new status after uploads so moving sections preserves retry state.

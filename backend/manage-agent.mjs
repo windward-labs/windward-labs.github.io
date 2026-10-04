@@ -53,7 +53,8 @@ try {
     };
     const identity=await get('me'),clients=await get('clients');
     if(identity.keyId!==env.WINDWARD_API_KEY_ID)throw new Error('Unexpected key identity.');
-    console.log(JSON.stringify({mode,email:identity.email,keyId:identity.keyId,scopes:identity.scopes,clientCount:clients.clients.length,verified:true},null,2));
+    const detail=clients.clients.length ? await get(`clients/${encodeURIComponent(clients.clients[0].id)}`) : null;
+    console.log(JSON.stringify({mode,email:identity.email,keyId:identity.keyId,scopes:identity.scopes,clientCount:clients.clients.length,clientDetailVerified:!!detail,verified:true},null,2));
   } else if(command==='list') {
     console.log(execute('SELECT id,email,label,scopes,created_at,expires_at,revoked_at FROM agent_keys ORDER BY created_at DESC;'));
   } else if(command==='revoke') {

@@ -28,6 +28,7 @@ function fixture(extraEnv = {}) {
   sqlite.exec('COMMIT');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0004_progress_attachments.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0005_agents.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0006_update_dates.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -138,6 +139,58 @@ test('agent attachment upload uses the existing private storage and records Jame
   await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',update);
   assert.equal((await f.file(key.actor,clientId,task.id,crypto.randomUUID(),'POST','file bytes',{},update.id)).status,200);
   assert.equal(f.sqlite.prepare('SELECT actor_email FROM attachments').get().actor_email,key.actor.email);
+});
+test('email event dates sort chronologically while ingestion, status and financial dates remain unchanged',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  f.at('2026-10-04T22:00:00.000Z');
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/updates`;
+  const note={id:crypto.randomUUID(),note:'Email request received.',occurredAt:'2026-09-28T15:22:00-07:00',source:{type:'email',id:'historical-message'}};
+  assert.equal((await f.call(key.actor,path,'POST',note)).status,200);
+  await f.call(key.actor,path,'POST',{id:crypto.randomUUID(),note:'More recent email.',occurredAt:'2026-09-30T12:00:00Z'});
+  const older={id:crypto.randomUUID(),note:'Earlier discussion.',occurredAt:'2026-09-20T12:00:00Z'};
+  await f.call(key.actor,path,'POST',older);
+  const result=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.deepEqual(result.updates.map(update=>update.note),['More recent email.','Email request received.','Earlier discussion.']);
+  const saved=result.updates.find(update=>update.id===note.id);
+  assert.equal(saved.occurred_at,'2026-09-28T22:22:00.000Z');
+  assert.equal(saved.created_at,'2026-10-04T22:00:00.000Z');
+  assert.equal(result.balance,-4);assert.equal(result.tasks[0].status,'in_progress');
+  assert.equal(result.ledger.length,1);assert.equal(result.ledger[0].created_at,'2026-10-04T22:00:00.000Z');
+  assert.equal((await f.call(key.actor,path,'POST',{...note,occurredAt:'2026-09-28T22:22:00Z'})).status,200);
+  assert.equal((await f.call(key.actor,path,'POST',{...note,occurredAt:'2026-09-29T22:22:00Z'})).status,409);
+  const normal={id:crypto.randomUUID(),note:'Recorded now.'};
+  const normalResult=await f.call(key.actor,path,'POST',normal);
+  assert.equal(normalResult.data.updates[0].id,normal.id);
+  assert.equal(normalResult.data.updates[0].occurred_at,null);
+});
+test('invalid and ambiguous email dates cannot silently produce misdated updates',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/updates`;
+  for(const occurredAt of ['2026-09-28','2026-09-28T12:00:00','2026-02-30T12:00:00Z','2026-09-28T24:00:00Z','nonsense',null]) {
+    assert.equal((await f.call(key.actor,path,'POST',{id:crypto.randomUUID(),note:'Invalid date',occurredAt})).status,400);
+  }
+  for(const field of ['createdAt','date'])assert.equal((await f.call(key.actor,path,'POST',{id:crypto.randomUUID(),note:'Wrong field',[field]:'2026-09-28T12:00:00Z'})).status,400);
+  assert.equal((await f.call(contact,path,'POST',{id:crypto.randomUUID(),note:'Client cannot backdate',occurredAt:'2026-09-28T12:00:00Z'})).status,403);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM task_updates').get().n,0);
+});
+test('existing progress dates can be corrected with a retained audit and no changes to notes, status, files or credits',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  f.at('2026-10-04T22:00:00.000Z');await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const update={id:crypto.randomUUID(),note:'Imported email.'};
+  await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',update);
+  const path=`/clients/${clientId}/tasks/${task.id}/updates/${update.id}`,body={occurredAt:'2026-09-28T15:22:00-07:00'};
+  assert.equal((await f.call(contact,path,'PATCH',body)).status,403);
+  const result=await f.call(key.actor,path,'PATCH',body);
+  assert.equal(result.status,200);assert.equal(result.data.updates[0].occurred_at,'2026-09-28T22:22:00.000Z');
+  assert.equal(result.data.updates[0].created_at,'2026-10-04T22:00:00.000Z');assert.equal(result.data.updates[0].note,update.note);
+  assert.equal(result.data.tasks[0].status,'in_progress');assert.equal(result.data.balance,-4);
+  assert.equal((await f.call(key.actor,path,'PATCH',body)).status,200);
+  const changes=f.sqlite.prepare('SELECT * FROM update_date_changes').all();
+  assert.equal(changes.length,1);assert.equal(changes[0].previous_date,'2026-10-04T22:00:00.000Z');assert.equal(changes[0].actor_email,key.actor.email);
+  assert.equal((await f.call(key.actor,path,'PATCH',{...body,note:'Overwritten'})).status,400);
+  const other=await f.client();assert.equal((await f.call(key.actor,`/clients/${other}/tasks/${task.id}/updates/${update.id}`,'PATCH',body)).status,404);
 });
 
 test('attachments require staff uploads and current client membership for private downloads',async()=>{
