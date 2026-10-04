@@ -130,6 +130,10 @@
 .portal-attachments li { display: flex; align-items: baseline; gap: 12px; margin: 8px 0; }
 .portal-attachments button { overflow-wrap: anywhere; text-align: left; }
 .portal-form input, .portal-form textarea, .portal-form select, .portal-checkout select { margin-top: 8px; font-weight: 400; }
+.workspace .portal-form input[type="file"] { height: auto; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; line-height: 20px; }
+.portal-form input[type="file"]::file-selector-button { min-height: 40px; margin-right: 12px; padding: 8px 16px; border: 1px solid #dedede; border-radius: 4px; background: transparent; color: #171717; font: inherit; cursor: pointer; }
+.portal-form input[type="file"]::file-selector-button:hover { background: #f0f0f0; }
+.portal-form input[type="file"]:disabled::file-selector-button { color: #737373; cursor: not-allowed; background: #eee; border-color: #ddd; }
 .portal-task { border-bottom: 1px solid var(--color-border); padding: 24px 0; }
 .portal-task:first-child { padding-top: 0; }
 .portal-task summary { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
