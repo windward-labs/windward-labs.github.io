@@ -45,3 +45,23 @@ test('blank hours save only progress; invalid quantities and hours with cancella
     const f=fixture();await assert.rejects(saveProgress({...f.args,...invalid}));assert.equal(f.calls.length,0);
   }
 });
+
+test('fixed-price progress sends private hours without credits and retries without charges',async()=>{
+  const calls=[],times=new Map(),updates=new Map();let fail=true;
+  const api=async(path,method,body)=>{
+    calls.push({path,body});
+    if(path.endsWith('/time-entries')) {
+      assert.equal(body.credits,undefined);
+      if(times.has(body.id))assert.deepEqual(times.get(body.id),body);
+      times.set(body.id,body);
+    } else if(method==='PATCH') {
+      if(fail)throw Error('Temporary update failure');
+      updates.set(body.id,body);
+    }
+    return {balance:-20};
+  };
+  const args={api,clientId:'client',taskId:'fixed-project',pricingModel:'fixed',id:'stable-time-id',status:'in_progress',note:'Design completed',hours:6,occurredAt:'2026-09-30T12:00:00Z',files:[]};
+  await assert.rejects(saveProgress(args),/Hours were recorded/);fail=false;
+  assert.equal((await saveProgress(args)).balance,-20);assert.equal(times.size,1);assert.equal(updates.size,1);
+  assert.equal(calls.some(call=>call.path.endsWith('/work-entries') || call.path.endsWith('/charges')),false);
+});

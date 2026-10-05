@@ -18,6 +18,11 @@ export function id(value) {
   return value;
 }
 export function workInput(body) {
+  const pricingModel=body.pricingModel ?? 'hourly';
+  if(!['fixed','hourly'].includes(pricingModel))throw new PortalError(400,'Choose fixed or hourly pricing.');
+  const fixedCredits=body.fixedCredits ?? null,budgetCredits=body.budgetCredits ?? null;
+  for(const value of [fixedCredits,budgetCredits])if(value!==null && (!Number.isSafeInteger(value) || value<1 || value>10000))throw new PortalError(400,'Agreement credits must be a whole number from 1 to 10,000.');
+  if(pricingModel==='fixed' ? fixedCredits===null || budgetCredits!==null || (body.credits ?? 0)!==0 : fixedCredits!==null || (budgetCredits!==null && (body.credits ?? 0)>budgetCredits))throw new PortalError(400,'Fixed projects require fixedCredits and separate charges; hourly projects may have budgetCredits.');
   const credits = body.credits ?? 0;
   if (!Number.isSafeInteger(credits) || credits < 0 || credits > 10000) throw new PortalError(400, 'Use a whole credit amount between 0 and 10,000. Omit credits to charge only dated work entries.');
   if (!['email','text','call','meeting','other'].includes(body.source)) throw new PortalError(400, 'Choose a source channel.');
@@ -26,7 +31,7 @@ export function workInput(body) {
   const occurredAt=body.occurredAt===undefined ? null : workTimestamp(body.occurredAt);
   const emailMessageId=body.emailMessageId===undefined ? null : text(body.emailMessageId,'Email message ID',500);
   if(emailMessageId && !occurredAt)throw new PortalError(400,'Send occurredAt with the email message ID.');
-  return { id: id(body.id), title: text(body.title,'Title',160), description: text(body.description,'Work description'), requestedBy: text(body.requestedBy,'Requested by',254), source: body.source, credits, status: body.status,occurredAt,emailMessageId };
+  return { id: id(body.id), title: text(body.title,'Title',160), description: text(body.description,'Work description'), requestedBy: text(body.requestedBy,'Requested by',254), source: body.source, credits,pricingModel,fixedCredits,budgetCredits, status: body.status,occurredAt,emailMessageId };
 }
 export function statusInput(body) {
   if (!['queued','in_progress','completed','cancelled'].includes(body.status)) throw new PortalError(400, 'Choose a valid status.');

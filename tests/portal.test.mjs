@@ -35,6 +35,7 @@ function fixture(extraEnv = {}) {
   sqlite.exec('BEGIN');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0010_work_entries.sql',import.meta.url),'utf8'));
   sqlite.exec('COMMIT');
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0011_project_agreements.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -938,4 +939,71 @@ test('eight-credit purchases award exactly eight credits in both catalogs and re
     assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,16);
     f.sqlite.close();
   }
+});
+
+test('fixed agreements charge upfront or milestones exactly once, with private nonbillable hours',async()=>{
+  const f=fixture(),clientId=await f.client(),project={...f.work(0),pricingModel:'fixed',fixedCredits:20};
+  const path=`/clients/${clientId}/tasks/${project.id}`;
+  let result=await f.call(staff,`/clients/${clientId}/tasks`,'POST',project);
+  assert.equal(result.status,200);assert.equal(result.data.balance,0);
+  const charge={id:crypto.randomUUID(),occurredAt:'2025-08-15T00:00:00Z',credits:12,note:'Agreed discovery milestone'};
+  for(let i=0;i<2;i++){result=await f.call(staff,`${path}/charges`,'POST',charge);assert.equal(result.status,200);assert.equal(result.data.balance,-12);}
+  const internal={id:crypto.randomUUID(),occurredAt:charge.occurredAt,hours:8,note:'Private effort tracking',source:{type:'email',id:'private-email-reference'}};
+  for(const body of [internal,internal,{...internal,id:crypto.randomUUID()}]) {
+    result=await f.call(staff,`${path}/time-entries`,'POST',body);
+    assert.equal(result.status,200);assert.equal(result.data.balance,-12);assert.equal(result.data.timeEntries.length,1);
+  }
+  assert.equal((await f.call(contact,`${path}/time-entries`)).status,403);
+  const clientView=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(clientView.timeEntries,undefined);assert.equal(clientView.agreementChanges,undefined);
+  assert.equal(JSON.stringify(clientView).includes('Private effort tracking'),false);assert.equal(JSON.stringify(clientView).includes('private-email-reference'),false);
+  assert.equal((await f.call(staff,`${path}/work-entries`,'POST',datedEntry(4))).status,409);
+  assert.equal((await f.call(staff,`${path}/charges`,'POST',{...charge,id:crypto.randomUUID(),credits:9})).status,409);
+  result=await f.call(staff,`${path}/charges`,'POST',{...charge,id:crypto.randomUUID(),credits:8,occurredAt:'2025-09-15T00:00:00Z'});
+  assert.equal(result.status,200);assert.equal(result.data.balance,-20);
+  assert.equal((await f.call(staff,`/clients/${clientId}/billing?period=2025-08`)).data.credits,12);
+  assert.equal((await f.call(staff,`/clients/${clientId}/billing?period=2025-09`)).data.credits,8);
+  assert.equal(result.data.ledger.filter(row=>row.kind==='work').length,2);
+  assert.equal(result.data.ledger.find(row=>row.id===`project-charge:${charge.id}`).occurred_at,'2025-08-15T00:00:00.000Z');
+  assert.equal((await f.call(contact,`${path}/charges`,'POST',charge)).status,403);
+  for(let i=0;i<2;i++)assert.equal((await f.call(staff,path,'PATCH',{id:'11111111-1111-4111-8111-111111111111',status:'cancelled',note:'Cancel scope'})).data.balance,0);
+});
+
+test('hourly cap cannot be exceeded, approval changes are audited and retries preserve balances',async()=>{
+  const f=fixture(),clientId=await f.client(),project={...f.work(0),pricingModel:'hourly',budgetCredits:8};
+  const path=`/clients/${clientId}/tasks/${project.id}`;
+  assert.equal((await f.call(staff,`/clients/${clientId}/tasks`,'POST',project)).status,200);
+  const results=await Promise.all([datedEntry(8),datedEntry(8)].map(body=>f.call(staff,`${path}/work-entries`,'POST',body)));
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+  let detail=(await f.call(staff,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,-8);
+  const change={id:crypto.randomUUID(),expectedVersion:detail.tasks[0].details_version,pricingModel:'hourly',budgetCredits:16,approvalNote:'Client approved another 8 credits by email'};
+  assert.equal((await f.call(staff,`${path}/agreement`,'PATCH',{...change,approvalNote:''})).status,400);
+  assert.equal((await f.call(contact,`${path}/agreement`,'PATCH',change)).status,403);
+  for(let i=0;i<2;i++)assert.equal((await f.call(staff,`${path}/agreement`,'PATCH',change)).status,200);
+  assert.equal((await f.call(staff,`${path}/agreement`,'PATCH',{...change,id:crypto.randomUUID()})).status,409);
+  assert.equal((await f.call(staff,`${path}/work-entries`,'POST',datedEntry(8))).status,200);
+  detail=(await f.call(staff,`/clients/${clientId}`)).data;
+  assert.equal(detail.balance,-16);assert.equal(detail.agreementChanges.length,1);
+  const convert={id:crypto.randomUUID(),expectedVersion:detail.tasks[0].details_version,pricingModel:'fixed',fixedCredits:24,approvalNote:'Client approved fixed completion scope'};
+  detail=(await f.call(staff,`${path}/agreement`,'PATCH',convert)).data;
+  assert.equal(detail.balance,-16);
+  assert.equal((await f.call(staff,`${path}/charges`,'POST',{id:crypto.randomUUID(),credits:8,occurredAt:'2025-09-15T00:00:00Z',note:'Completion milestone'})).data.balance,-24);
+  const clientView=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(clientView.agreementChanges,undefined);
+  assert.equal(JSON.stringify(clientView).includes(convert.approvalNote),false);
+});
+
+test('fixed charges respect issued billing locks while internal hours remain nonbillable',async()=>{
+  const f=fixture({stripe:invoiceStripe()}),clientId=await f.client(),project={...f.work(0),pricingModel:'fixed',fixedCredits:20};
+  const path=`/clients/${clientId}/tasks/${project.id}`;
+  await f.call(staff,`/clients/${clientId}/tasks`,'POST',project);
+  const charge={id:crypto.randomUUID(),occurredAt:'2025-08-15T00:00:00Z',credits:12,note:'Discovery'};
+  await f.call(staff,`${path}/charges`,'POST',charge);
+  // An issued period is immutable even for a new milestone.
+  f.sqlite.exec(`INSERT INTO invoices(id,client_id,period,cutoff,email,credits,amount_cents,status,created_by,actor_email,attribution_mode,stripe_mode) VALUES('issued','${clientId}','2025-08','2025-09-01T00:00:00.000Z','alex@example.com',12,90000,'open','staff','phil@windwardlabs.xyz','monthly','test')`);
+  assert.equal((await f.call(staff,`${path}/charges`,'POST',{...charge,id:crypto.randomUUID(),credits:4})).status,409);
+  assert.equal((await f.call(staff,`${path}/charges`,'POST',charge)).status,200);
+  const before=(await f.call(staff,`/clients/${clientId}`)).data.balance;
+  assert.equal((await f.call(staff,`${path}/time-entries`,'POST',{id:crypto.randomUUID(),occurredAt:charge.occurredAt,hours:20,note:'Actual effort'})).data.balance,before);
 });

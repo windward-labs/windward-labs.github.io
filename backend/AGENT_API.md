@@ -112,11 +112,17 @@ Create project metadata with `POST /clients/{client}/tasks`:
   "description": "Design the new onboarding screens for client review.",
   "requestedBy": "client@example.com",
   "source": "email",
-  "status": "in_progress"
+  "status": "in_progress",
+  "pricingModel": "hourly",
+  "budgetCredits": 64
 }
 ```
 
-Omit `credits` (or send zero). Creation does not debit the balance. `source` is
+Omit `credits` (or send zero). Creation does not debit the balance. Choose the
+client-approved `pricingModel` explicitly: `fixed` or `hourly`. For compatibility,
+omitting it retains hourly pricing; the browser defaults new projects to fixed
+price. An optional hourly `budgetCredits` is a hard cap on total charged credits.
+Never infer an agreement from time estimates or change it without client approval. `source` is
 `email`, `text`, `call`, `meeting`, or `other`; initial status is `queued`,
 `in_progress`, or `completed`. Retry creation using the same UUID and terms.
 Actor identity always comes from the authenticated staff account.
@@ -150,6 +156,72 @@ source message within a project; if one email contains multiple dated line items
 use a stable documented line-item identifier as part of its source ID. UUIDs are
 globally unique across projects. Restricted keys need `billing:work` to log work
 and `clients:read` to list entries with `GET .../work-entries`.
+
+## Fixed-price projects and internal hours
+
+Create with `pricingModel: "fixed"`, `fixedCredits: 20`, and no initial `credits`.
+The price covers the agreed description, independently of the hours spent.
+Creation is free; charge the full price upfront or agreed milestones separately:
+
+`POST /clients/{client}/tasks/{project}/charges`
+
+```json
+{
+  "id": "a saved charge UUID",
+  "occurredAt": "2026-09-30T00:00:00Z",
+  "credits": 10,
+  "note": "Approved design milestone"
+}
+```
+
+Charges deduct credits once, cannot exceed the agreed price in total, and use
+`occurredAt` for UTC billing attribution. Use the agreed charge date; do not infer
+it from project creation or private time records. An issued invoice locks its
+billing period. Financial charge records cannot be edited or deleted. Retrying
+the same UUID and terms does not charge again, including after invoicing.
+`GET .../charges` returns client-visible `projectCharges`.
+
+For fixed-price effort tracking use `POST .../time-entries` with `id`, `occurredAt`,
+`hours`, `note`, and optional `source: {type, id}`. **Do not send `credits`.**
+Quarter-hour increments are required. These records never debit the balance,
+affect billing, or appear to clients, including their hours, notes, and sources.
+They are immutable and deduplicate by UUID and project/source reference.
+`GET .../time-entries` is staff-only. Both writes require `billing:work`.
+The client detail includes `timeEntries` only for staff.
+
+Save the client-facing progress update separately using the same stable UUID;
+its note and attachments remain visible to clients. In the browser, optional
+hours on progress updates automatically use the appropriate entry endpoint.
+Hourly progress creates chargeable work entries; fixed-price progress creates
+private time entries. Never post a fixed-price project's hours to `/work-entries`.
+
+## Change an approved agreement
+
+`PATCH /clients/{client}/tasks/{project}/agreement`
+
+```json
+{
+  "id": "a saved change UUID",
+  "expectedVersion": 2,
+  "pricingModel": "hourly",
+  "budgetCredits": 96,
+  "approvalNote": "Client approved the increased budget in the September 30 email"
+}
+```
+
+Use `task.details_version` as `expectedVersion`; refresh after a 409. Send
+`fixedCredits` for fixed pricing instead of `budgetCredits`. Omit an hourly
+budget to explicitly remove its cap. A price/budget must cover credits already
+charged. `approvalNote` is required and private to staff. Record actual client
+approval; this endpoint does not obtain approval on your behalf. Changes are
+append-only audited with before/after terms and actor. Restricted keys require
+`billing:agreement`; James's existing admin key already includes it.
+
+Changing a price, cap, or pricing model never alters historical entries, their
+billing dates, or the balance. A higher fixed price needs a separate approved
+charge. Switching a legacy project to fixed price requires first reallocating
+its original charge. Existing projects retain hourly pricing unless explicitly
+changed with approval. Private fixed-price time remains private after a switch.
 
 ## Reallocate existing project charges
 
@@ -359,5 +431,5 @@ request and needs reconciliation against the project/invoice records.
 
 For a restricted integration, supported scopes are `clients:read`,
 `projects:create`, `projects:update`, `projects:moderate`, `projects:cancel`, `attachments:write`,
-`billing:read`, `billing:work`, `billing:dates`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
+`billing:read`, `billing:work`, `billing:dates`, `billing:agreement`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
 requires both update and cancel; `admin` includes every existing staff API route.

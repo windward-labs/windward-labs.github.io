@@ -1,6 +1,6 @@
 import {PortalError,isStaffEmail,normalizeEmail} from './domain.mjs';
 
-export const agentScopes=['admin','clients:read','projects:update','projects:moderate','projects:create','projects:cancel','attachments:write','billing:read','billing:work','billing:dates','billing:draft','billing:issue','billing:void'];
+export const agentScopes=['admin','clients:read','projects:update','projects:moderate','projects:create','projects:cancel','attachments:write','billing:read','billing:work','billing:dates','billing:agreement','billing:draft','billing:issue','billing:void'];
 export const jamesScopes=['admin'];
 export async function tokenHash(token) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
@@ -25,6 +25,7 @@ export function authorizeAgent(actor,path,method) {
   if(path==='/v1/me' && method==='GET')return;
   let scope;
   if(method==='GET' && /^\/v1\/clients(?:\/[^/]+)?$/.test(path))scope='clients:read';
+  else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/(charges|time-entries|agreement)$/.test(path))scope=method==='GET' ? 'clients:read' : method==='PATCH' && path.endsWith('/agreement') ? 'billing:agreement' : method==='POST' && !path.endsWith('/agreement') ? 'billing:work' : null;
   else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/work-entries(?:\/[^/]+)?$/.test(path))scope=method==='GET' && path.endsWith('/work-entries') ? 'clients:read' : method==='POST' && path.endsWith('/work-entries') ? 'billing:work' : method==='PATCH' || (method==='POST' && path.endsWith('/reallocate')) ? 'billing:dates' : null;
   else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/attachments\/[^/]+$/.test(path))scope=method==='GET'?'clients:read':method==='POST'?'attachments:write':null;
   else if(method==='GET' && /^\/v1\/clients\/[^/]+\/(billing|activity\/[^/]+\/document)$/.test(path))scope='billing:read';

@@ -123,12 +123,15 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const [workFormRevision,setWorkFormRevision] = useState(0);
   const [workSuccess,setWorkSuccess] = useState<{id:string;credits:number;balance:number}|null>(null);
   const [workHours,setWorkHours] = useState('');
+  const [pricingModel,setPricingModel]=useState<'fixed'|'hourly'>('fixed');
+  const [fixedPrice,setFixedPrice]=useState('');
+  const [chargeTiming,setChargeTiming]=useState('upfront');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
   const [fileError,setFileError] = useState('');
   const activeProjects = client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress');
   const completedProjects = client.tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
   const activity=creditActivity(client.ledger,client.workEntries);
-  const workCredits = Number(workHours) * normalCreditsPerHour;
+  const workCredits = pricingModel==='fixed' ? (chargeTiming==='upfront' ? Number(fixedPrice) : 0) : Number(workHours) * normalCreditsPerHour;
   const validWorkHours = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
@@ -160,13 +163,17 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       {workSuccess && <ProjectCreatedToast success={workSuccess} onDismiss={()=>setWorkSuccess(null)}/>}
       {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
-        const credits = Number(form.get('hours')) * normalCreditsPerHour;
+        const fixed=form.get('pricingModel')==='fixed';
+        const fixedCredits=fixed ? Number(form.get('fixedCredits')) : null;
+        const budgetCredits=!fixed && form.get('budgetCredits') ? Number(form.get('budgetCredits')) : null;
+        const credits = fixed ? (form.get('chargeTiming')==='upfront' ? fixedCredits! : 0) : Number(form.get('hours')) * normalCreditsPerHour;
         if (!Number.isSafeInteger(credits) || credits < 0 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500, or leave blank.');
+        if(!fixed && budgetCredits!==null && credits>budgetCredits)throw new Error('Initial hours exceed the approved budget.');
         const workDate=String(form.get('occurredAt') || '');
-        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:0,status:form.get('status')});
+        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:0,status:form.get('status'),pricingModel:fixed ? 'fixed' : 'hourly',fixedCredits,budgetCredits});
         if(credits>0) {
           const occurredAt=workDate ? new Date(workDate).toISOString() : savedClient.tasks.find(task=>task.id===id)!.created_at;
-          savedClient=await api<ClientDetail>(`/clients/${client.id}/tasks/${id}/work-entries`,'POST',{id,occurredAt,hours:credits/normalCreditsPerHour,credits,note:form.get('description')});
+          savedClient=await api<ClientDetail>(`/clients/${client.id}/tasks/${id}/${fixed ? 'charges' : 'work-entries'}`,'POST',{id,occurredAt,...(fixed ? {} : {hours:credits/normalCreditsPerHour}),credits,note:fixed ? `Agreed price: ${String(form.get('title'))}` : form.get('description')});
         }
         setClient(savedClient);
         try {
@@ -176,18 +183,20 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
           throw new Error(`Work was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Submit again to retry the attachments; credits will not be deducted again.`);
         }
         if (workFiles.length) {savedClient = await api<ClientDetail>(`/clients/${client.id}`);setClient(savedClient);}
-        setWorkFiles([]);setWorkHours('');
+        setWorkFiles([]);setWorkHours('');setFixedPrice('');setPricingModel('fixed');setChargeTiming('upfront');
         setWorkSuccess({id,credits,balance:savedClient.balance});
         setShowWorkForm(false);setWorkFormRevision(value=>value+1);
       }}>
+        <label>Project type<select name="pricingModel" value={pricingModel} onChange={event=>setPricingModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></label>
+        {pricingModel==='fixed' ? <><div className="fields"><label>Agreed price (credits)<input name="fixedCredits" type="number" required min={1} max={10000} step={1} value={fixedPrice} onChange={event=>setFixedPrice(event.target.value)}/></label><label>Charge timing<select name="chargeTiming" value={chargeTiming} onChange={event=>setChargeTiming(event.target.value)}><option value="upfront">Charge upfront</option><option value="milestones">Charge by milestones</option></select></label></div><p className="caption muted">{Number(fixedPrice)>0 ? `${formatPrice(Number(fixedPrice)*creditPriceCents)} · ` : ''}A fixed price for the agreed scope. Hours are tracked privately without additional charges.</p></> : <><label>Approved budget (credits, optional)<input name="budgetCredits" type="number" min={1} max={10000} step={1}/></label><p className="caption muted">Actual time costs 4 credits per hour ($300/hour). Further work requires approval when the budget is reached.</p></>}
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
-        <div className="fields"><div><span className="portal-field-label"><label htmlFor="work-hours">Initial hours (optional)</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
+        <div className="fields">{pricingModel==='hourly' && <div><span className="portal-field-label"><label htmlFor="work-hours">Initial hours (optional)</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div>}<label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
-        <label>Work date (optional)<input type="datetime-local" name="occurredAt" step={1} max={localDateTime(new Date().toISOString())}/></label><p className="caption muted">Use when the work happened. Leave blank to use today. Billing months use UTC.</p>
-        <p className="caption muted">Initial hours create a dated work entry. Leave blank to start without a charge.</p>
+        <label>{pricingModel==='fixed' ? 'Charge date (optional)' : 'Work date (optional)'}<input type="datetime-local" name="occurredAt" step={1} max={localDateTime(new Date().toISOString())}/></label><p className="caption muted">Leave blank to use today. Billing months use UTC.</p>
+        <p className="caption muted">{pricingModel==='fixed' ? 'Upfront charges use this date. Milestone projects start without a charge.' : 'Initial hours create a dated work entry. Leave blank to start without a charge.'}</p>
       </MutationForm></ProjectDialog>}
         {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div>}
       </section>
@@ -332,7 +341,7 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
 }
 
 function TaskStatus({task,showStatus=true}:{task:Task;showStatus?:boolean}) {
-  return <span className="caption portal-task-meta">{showStatus && <span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span>}<span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
+  return <span className="caption portal-task-meta">{showStatus && <span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span>}<span className="muted">{task.pricing_model==='fixed' ? 'Fixed price' : 'Hourly'} · {task.credits}{task.pricing_model==='fixed' ? ` / ${task.fixed_credits}` : ''} credits{task.status==='cancelled' ? ' returned' : ' charged'}</span></span>;
 }
 function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
   const [hovered,setHovered]=useState(false);
@@ -358,6 +367,33 @@ function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:
   const task=client.tasks.find(task=>task.id===projectId);
   const target=document.getElementById('service-credit-action');
   return <>{target && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
+}
+
+function ProjectAgreement({task,client,staff,api,setClient}:{task:Task;client:ClientDetail;staff:boolean;api:Api;setClient:(client:ClientDetail)=>void}) {
+  const fixed=task.pricing_model==='fixed';
+  const [editing,setEditing]=useState(false),[charging,setCharging]=useState(false),[busy,setBusy]=useState(false);
+  const [model,setModel]=useState<'fixed'|'hourly'>(task.pricing_model || 'hourly');
+  const [notice,setNotice]=useState('');
+  const times=(client.timeEntries || []).filter(entry=>entry.task_id===task.id);
+  const hours=times.reduce((sum,entry)=>sum+entry.hours,0);
+  const charges=(client.projectCharges || []).filter(entry=>entry.task_id===task.id);
+  const changes=(client.agreementChanges || []).filter(entry=>entry.task_id===task.id);
+  const remaining=fixed ? (task.fixed_credits || 0)-task.credits : task.budget_credits ? task.budget_credits-task.credits : null;
+  return <div className="stack portal-agreement">
+    <div className="row"><div><h3>{fixed ? 'Fixed-price agreement' : 'Hourly agreement'}</h3><p className="caption muted">{fixed ? `${task.fixed_credits} credits · ${formatPrice((task.fixed_credits || 0)*creditPriceCents)} for the agreed scope` : '4 credits per hour · $300/hour'}{!fixed && task.budget_credits ? ` · ${task.budget_credits} credits approved` : ''}</p></div>{staff && task.status!=='cancelled' && <button type="button" className="plain-button" onClick={()=>{setModel(task.pricing_model || 'hourly');setEditing(true);}}>Change agreement</button>}</div>
+    <div className="row"><p className="caption muted">{task.credits} credits charged{remaining!==null ? ` · ${remaining} ${fixed ? 'remaining to charge' : 'budget remaining'}` : ''}</p>{staff && fixed && task.status!=='cancelled' && !!remaining && <button type="button" className="plain-button" onClick={()=>setCharging(true)}>Charge milestone</button>}</div>
+    {notice && <p className="caption" role="status">{notice}</p>}
+    {fixed && charges.length>0 && <details><summary className="caption">Price charges</summary><ul>{charges.map(entry=><li key={entry.id}><time dateTime={entry.occurred_at}>{date(entry.occurred_at)}</time> · {entry.credits} credits · {entry.note}</li>)}</ul></details>}
+    {staff && fixed && <details><summary className="caption">Internal time · {hours} hours · no additional charge</summary>{times.length ? <ul>{times.map(entry=><li key={entry.id}><time dateTime={entry.occurred_at}>{date(entry.occurred_at)}</time> · {entry.hours} hours · {entry.note}</li>)}</ul> : <p className="caption muted">Log hours with a progress update to track effort privately.</p>}</details>}
+    {staff && changes.length>0 && <details><summary className="caption">Agreement history</summary><ul>{changes.map(change=><li key={change.id}>{date(change.created_at)} · {change.actor_email} · {change.approval_note}<p className="caption muted">{(()=>{const terms=JSON.parse(change.after_json);return terms.pricingModel==='fixed' ? `Fixed price: ${terms.fixedCredits} credits` : `Hourly budget: ${terms.budgetCredits ?? 'No cap'} credits`;})()}</p></li>)}</ul></details>}
+    {staff && <ProjectDialog id="charge-project" title="Charge milestone" open={charging} busy={busy} onClose={()=>setCharging(false)}><MutationForm label="Charge credits" onBusyChange={setBusy} submit={async(form,id)=>{
+      setClient(await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/charges`,'POST',{id,credits:Number(form.get('credits')),occurredAt:new Date(String(form.get('occurredAt'))).toISOString(),note:form.get('note')}));setCharging(false);setNotice('Milestone charged.');
+    }}><p className="caption muted">Up to {remaining} credits remain within the agreed price. This deducts credits once.</p><label>Credits<input name="credits" type="number" required min={1} max={remaining || 1} step={1}/></label><label>Charge date<input name="occurredAt" type="datetime-local" required step={1} defaultValue={localDateTime(new Date().toISOString())} max={localDateTime(new Date().toISOString())}/></label><label>Milestone summary<textarea name="note" required maxLength={2000} rows={3} placeholder="Visible to the client"/></label></MutationForm></ProjectDialog>}
+    {staff && <ProjectDialog id="change-project-agreement" title="Change agreement" open={editing} busy={busy} onClose={()=>setEditing(false)}><MutationForm label="Save approved agreement" onBusyChange={setBusy} submit={async(form,id)=>{
+      if(form.get('approved')!=='on')throw new Error('Confirm client approval before changing the agreement.');
+      setClient(await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/agreement`,'PATCH',{id,expectedVersion:task.details_version || 0,pricingModel:model,fixedCredits:model==='fixed' ? Number(form.get('fixedCredits')) : null,budgetCredits:model==='hourly' && form.get('budgetCredits') ? Number(form.get('budgetCredits')) : null,approvalNote:form.get('approvalNote')}));setEditing(false);setNotice('Agreement updated. Existing charges are unchanged.');
+    }}><label>Project type<select value={model} onChange={event=>setModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></label>{model==='fixed' ? <label>Approved fixed price (credits)<input name="fixedCredits" type="number" required min={Math.max(1,task.credits)} max={10000} step={1} defaultValue={task.fixed_credits ?? Math.max(1,task.credits)}/></label> : <label>Approved budget (credits, optional)<input name="budgetCredits" type="number" min={Math.max(1,task.credits)} max={10000} step={1} defaultValue={task.budget_credits ?? ''}/></label>}<p className="caption muted">Existing charges stay intact. A higher fixed price can be charged separately as a milestone.</p><label>Client approval reference<textarea name="approvalNote" required maxLength={2000} rows={3} placeholder="When and where the client approved this change; private to staff"/></label><label><input name="approved" type="checkbox" required/> The client has approved this agreement.</label></MutationForm></ProjectDialog>}
+  </div>;
 }
 
 function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDetail; staff:boolean; api:Api;setClient:(client:ClientDetail)=>void}) {
@@ -407,19 +443,20 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
       setPendingUpdate(id);
       const chosenDate=String(form.get('occurredAt') || '');
       if(progressHours && !chosenDate)throw new Error('Choose when the work happened.');
-      setClient(await saveProgress({api,clientId:client.id,taskId:task.id,id,status:String(form.get('status')),note:String(form.get('note')),hours:Number(progressHours),occurredAt:chosenDate ? new Date(chosenDate).toISOString() : undefined,files}));
-      setFiles([]); setPendingUpdate('');setProgressHours('');setProgressDate(localDateTime(new Date().toISOString()));setProjectNotice(progressCredits>0 ? `Progress saved · ${progressCredits} credits deducted.` : 'Progress saved.');
+      setClient(await saveProgress({api,clientId:client.id,taskId:task.id,pricingModel:task.pricing_model,id,status:String(form.get('status')),note:String(form.get('note')),hours:Number(progressHours),occurredAt:chosenDate ? new Date(chosenDate).toISOString() : undefined,files}));
+      setFiles([]); setPendingUpdate('');setProgressHours('');setProgressDate(localDateTime(new Date().toISOString()));setProjectNotice(progressCredits>0 ? task.pricing_model==='fixed' ? 'Progress saved · hours tracked privately, no credits deducted.' : `Progress saved · ${progressCredits} credits deducted.` : 'Progress saved.');
     }}><label>Status<select name="status" defaultValue={task.status}>{Object.entries(statusNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Progress note<textarea name="note" rows={3} required maxLength={2000} placeholder="Visible to the client"/></label>
       <AttachmentPicker helpId={`progress-attachments-${task.id}`} filesChanged={setFiles} errorChanged={setFileError}/>
       {fileError && <p role="alert">{fileError}</p>}
-      <div className="fields"><label>Hours worked (optional)<input name="hours" type="number" min={0.25} max={2500} step={0.25} value={progressHours} onChange={event=>setProgressHours(event.target.value)} disabled={task.billing_mode!=='entries'}/></label><label>Work date<input name="occurredAt" type="datetime-local" step={1} required={!!progressHours} value={progressDate} onChange={event=>setProgressDate(event.target.value)} max={localDateTime(new Date().toISOString())}/></label></div>
-      {Number.isSafeInteger(progressCredits) && progressCredits>0 ? <p className="caption muted" role="status">{progressHours} hours = {progressCredits} credits · {formatPrice(progressCredits*creditPriceCents)}. Log only additional work that hasn’t already been recorded.</p> : <p className="caption muted">Leave hours blank to save progress without a charge.</p>}
-      {task.billing_mode!=='entries' && <p className="caption muted">Reallocate this project’s original charge before logging additional hours.</p>}
+      <div className="fields"><label>Hours worked (optional)<input name="hours" type="number" min={0.25} max={2500} step={0.25} value={progressHours} onChange={event=>setProgressHours(event.target.value)} disabled={task.pricing_model!=='fixed' && task.billing_mode!=='entries'}/></label><label>Work date<input name="occurredAt" type="datetime-local" step={1} required={!!progressHours} value={progressDate} onChange={event=>setProgressDate(event.target.value)} max={localDateTime(new Date().toISOString())}/></label></div>
+      {task.pricing_model==='fixed' ? <p className="caption muted">Hours are private to staff and do not change the agreed price.</p> : Number.isSafeInteger(progressCredits) && progressCredits>0 ? <p className="caption muted" role="status">{progressHours} hours = {progressCredits} credits · {formatPrice(progressCredits*creditPriceCents)}. Log only additional work that hasn’t already been recorded.</p> : <p className="caption muted">Leave hours blank to save progress without a charge.</p>}
+      {task.pricing_model!=='fixed' && task.billing_mode!=='entries' && <p className="caption muted">Reallocate this project’s original charge before logging additional hours.</p>}
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div>;
   return <section className="section stack portal-project-page"><div className="row"><div><h1>{task.title}</h1><p className="caption muted">{client.name}</p></div><div className="portal-actions"><TaskStatus task={task}/>{staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="edit-project-details" onClick={()=>{setProjectNotice('');setEditing(task);}}>Edit details</button>}</div></div>
     {projectNotice && <p className="caption portal-edit-success" role="status">{projectNotice}</p>}
+    <ProjectAgreement task={task} client={client} staff={staff} api={api} setClient={setClient}/>
     {task.billing_mode!=='entries' && <div className="portal-actions caption muted"><span>Work date · {date(task.occurred_at || task.created_at)}</span>{staff && <button type="button" className="portal-update-action" aria-haspopup="dialog" aria-controls="edit-project-date" onClick={()=>{setProjectNotice('');setDateEditing(task);}}>Change work date</button>}</div>}
     {staff && <ProjectDialog id="edit-work-entry" title="Edit work entry" open={!!entryEditing} busy={dateSaving} onClose={()=>setEntryEditing(null)}>{entryEditing && <MutationForm label="Save changes" reset={false} onBusyChange={setDateSaving} submit={async(form,id)=>{
       const chosen=String(form.get('occurredAt')),original=entryEditing.occurred_at;

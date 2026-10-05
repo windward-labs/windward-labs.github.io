@@ -1,3 +1,4 @@
+import {agreementRecords,recordAgreementWork,changeAgreement} from './project-agreements.mjs';
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput,eventTimestamp,workTimestamp } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
 import {authorizeAgent,requireAgentScope} from './agent-auth.mjs';
@@ -35,7 +36,7 @@ async function detail(db, actor, clientId) {
     query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
     query(db,'SELECT d.* FROM project_date_changes d JOIN tasks t ON t.id=d.task_id WHERE t.client_id=? AND ?=1 ORDER BY d.created_at,d.id',clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
+  return { ...client,...balances.results[0],...await agreementRecords(db,actor,clientId), members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
 }
 
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
@@ -117,6 +118,23 @@ async function handleAuthorizedApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const agreementRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/(charges|time-entries|agreement)$/);
+    if(agreementRoute) {
+      const clientId=id(agreementRoute[1]),taskId=id(agreementRoute[2]),resource=agreementRoute[3];
+      await clientAccess(db,actor,clientId);
+      const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
+      if(!task)throw new PortalError(404,'Project not found.');
+      if(method==='GET' && resource!=='agreement') {
+        if(resource==='time-entries')requireStaff(actor);
+        const records=await agreementRecords(db,actor,clientId),key=resource==='charges' ? 'projectCharges' : 'timeEntries';
+        return json({[key]:records[key].filter(row=>row.task_id===taskId)});
+      }
+      requireStaff(actor);
+      if(resource==='agreement' && method==='PATCH')await changeAgreement(db,actor,task,await bodyOf(request));
+      else if(resource!=='agreement' && method==='POST')await recordAgreementWork(db,actor,taskId,resource,await bodyOf(request));
+      else throw new PortalError(405,'Method not allowed.');
+      return json(await detail(db,actor,clientId));
     }
     const entryRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/work-entries(?:\/(reallocate|[^/]+))?$/);
     if(entryRoute) {
@@ -280,10 +298,10 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const work = workInput(body);
       const existing = await query(db,'SELECT * FROM tasks WHERE id=?',work.id).first();
       if (existing) {
-        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.original_credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy || (work.occurredAt && (existing.occurred_at ?? existing.created_at)!==work.occurredAt)) throw new PortalError(409,'Work record ID already used.');
+        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.original_credits !== work.credits || existing.pricing_model!==work.pricingModel || existing.fixed_credits!==work.fixedCredits || existing.budget_credits!==work.budgetCredits || existing.source !== work.source || existing.requested_by !== work.requestedBy || (work.occurredAt && (existing.occurred_at ?? existing.created_at)!==work.occurredAt)) throw new PortalError(409,'Work record ID already used.');
         if(work.emailMessageId && (await query(db,'SELECT source_message_id FROM project_date_changes WHERE id=?',work.id).first())?.source_message_id!==work.emailMessageId)throw new PortalError(409,'Work record source already used.');
       } else {
-        const statements=[query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email,occurred_at,billing_mode,original_credits) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email,work.occurredAt,work.credits ? 'legacy' : 'entries',work.credits)];
+        const statements=[query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email,occurred_at,billing_mode,original_credits,pricing_model,fixed_credits,budget_credits) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email,work.occurredAt,work.credits ? 'legacy' : 'entries',work.credits,work.pricingModel,work.fixedCredits,work.budgetCredits)];
         if(work.occurredAt)statements.push(query(db,`INSERT INTO project_date_changes (id,task_id,previous_date,occurred_at,source_message_id,created_by,actor_email) SELECT ?,id,created_at,occurred_at,?,?,? FROM tasks WHERE id=?`,work.id,work.emailMessageId,actor.id,actor.email,work.id));
         await db.batch(statements);
       }
@@ -294,7 +312,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
     if (/Work date is covered by an issued invoice/i.test(String(error))) return json({error:'An issued invoice covers this work date. Resolve that invoice before changing its billing attribution.'},409);
-    if (/Work entry is covered by an issued invoice|Cancelled projects cannot record work|Allocation exceeds original charge|Reallocate the original project charge first|Work entry charge is immutable/i.test(String(error)))return json({error:String(error).replace(/^.*?(Work entry is covered|Cancelled projects|Allocation exceeds|Reallocate the original|Work entry charge)/,'$1')},409);
+    if (/Work entry is covered by an issued invoice|Cancelled projects cannot record work|Allocation exceeds original charge|Reallocate the original project charge first|Work entry charge is immutable|Fixed-price|Approved hourly budget|Internal time entries|Invalid project agreement|Agreement changes require approval/i.test(String(error)))return json({error:String(error).replace(/^.*?(Work entry is covered|Cancelled projects|Allocation exceeds|Reallocate the original|Work entry charge|Fixed-price|Approved hourly budget|Internal time entries|Invalid project agreement|Agreement changes require approval)/,'$1')},409);
     if (/UNIQUE constraint failed: invoices.client_id, invoices.period/i.test(String(error))) return json({error:'This month already has an invoice. Open the existing bill before creating another.'},409);
     if (/UNIQUE constraint/i.test(String(error))) return json({error:'This record or payment reference already exists. Refresh before trying again.'},409);
     console.error('Portal request failed',error instanceof Error ? error.name : 'Unknown error');

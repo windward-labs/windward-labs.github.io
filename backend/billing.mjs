@@ -7,7 +7,7 @@ export const invoicedCreditsSql=`COALESCE((SELECT SUM(i.credits) FROM invoices i
 // Purchased credits and invoice transfers cover the oldest active work first.
 // Cancellations remove their own charge; they must not pay unrelated old debt.
 // Work dates, rather than ingestion order, determine month attribution.
-export const ledgerEventDate=`CASE WHEN l.kind='work' THEN COALESCE((SELECT e.occurred_at FROM work_entries e WHERE 'work-entry:'||e.id=l.id),(SELECT t.occurred_at FROM tasks t WHERE t.id=l.task_id),l.created_at) ELSE l.created_at END`;
+export const ledgerEventDate=`CASE WHEN l.kind='work' THEN COALESCE((SELECT c.occurred_at FROM project_charges c WHERE 'project-charge:'||c.id=l.id),(SELECT e.occurred_at FROM work_entries e WHERE 'work-entry:'||e.id=l.id),(SELECT t.occurred_at FROM tasks t WHERE t.id=l.task_id),l.created_at) ELSE l.created_at END`;
 const cumulative=date=>`MAX(0,MIN(-c.balance,
   COALESCE((SELECT SUM(w.credits) FROM billable_work w WHERE w.client_id=c.id AND w.occurred_at<${date}),0)
   -COALESCE((SELECT SUM(l.credits) FROM ledger l WHERE l.client_id=c.id AND l.kind='purchase'),0)
