@@ -324,8 +324,8 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
   }}/></label><p id={helpId} className="caption muted">Up to 5 files, 10 MB each. Visible to this client’s approved emails and Windward staff.</p></>;
 }
 
-function TaskStatus({task}:{task:Task}) {
-  return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
+function TaskStatus({task,showStatus=true}:{task:Task;showStatus?:boolean}) {
+  return <span className="caption portal-task-meta">{showStatus && <span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span>}<span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
 }
 function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
   const [hovered,setHovered]=useState(false);
@@ -345,7 +345,7 @@ function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:num
   </div>,document.body);
 }
 function ProjectLink({task,clientId}:{task:Task;clientId:string}) {
-  return <a className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task}/><span aria-hidden="true">›</span></span></a>;
+  return <a className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task} showStatus={task.status==='completed' || task.status==='cancelled'}/><span aria-hidden="true">›</span></span></a>;
 }
 function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:ClientDetail;projectId:string;api:Api;setClient:(client:ClientDetail)=>void}) {
   const task=client.tasks.find(task=>task.id===projectId);

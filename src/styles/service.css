@@ -250,7 +250,7 @@
 
 .workspace .portal-project-link { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 12px 0; text-decoration: none; }
 .workspace .portal-project-link:hover > span:first-child { text-decoration: underline; text-underline-offset: 4px; }
-.portal-project-link > span:first-child { font-weight: 600; }
+.portal-project-link > span:first-child { font-weight: 400; }
 .portal-project-page .details-body { padding: 0; }
 .workspace .portal-credit-table :is(th,td):nth-child(3) { text-align: right; }
 .portal-credit-table .portal-payment-document { margin-top: 0; }
