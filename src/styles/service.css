@@ -184,6 +184,7 @@
 .portal-pack-heading > span:last-child { white-space: nowrap; }
 .portal-pack-badge { justify-self: start; padding: 4px 8px; border-radius: 4px; background: #e9e9e9; }
 .portal-order-summary { padding: 24px; border: 1px solid #dedede; border-radius: 4px; }
+.portal-order-summary .action { display: flex; justify-content: center; width: 100%; box-sizing: border-box; }
 .portal-checkout-balance { padding-top: 16px; border-top: 1px solid var(--color-border); }
 .portal-checkout-balance > span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 @media (max-width: 760px) { .portal-checkout-layout { grid-template-columns: 1fr; } }
