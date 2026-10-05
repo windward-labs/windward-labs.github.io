@@ -4,6 +4,7 @@ import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
 import { creditPacks, creditPriceCents, formatPrice, normalCreditsPerHour } from '../pricing.mjs';
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
 import { creditActivity } from './credit-activity.mjs';
+import { saveProgress } from './save-progress.mjs';
 import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice, WorkEntry } from './types';
 
 const statusNames: Record<WorkStatus, string> = { queued: 'Queued', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
@@ -367,6 +368,7 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   const [dateSaving,setDateSaving]=useState(false);
   const [entryEditing,setEntryEditing]=useState<WorkEntry|null>(null);
   const [showHidden,setShowHidden]=useState(false);
+  const [showAllActivity,setShowAllActivity]=useState(false);
   const [visibilityBusy,setVisibilityBusy]=useState('');
   const [visibilityError,setVisibilityError]=useState('');
   const [visibilityNotice,setVisibilityNotice]=useState('');
@@ -375,7 +377,8 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   const hiddenIds=new Set(hiddenUpdates.map(update=>update.id));
   const updates = projectUpdates.filter(update=>!update.hidden_at || (staff && showHidden));
   const entries=(client.workEntries || []).filter(entry=>entry.task_id===task.id);
-  const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null,entry:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update,entry:null})),...entries.map(entry=>({id:`work:${entry.id}`,at:entry.occurred_at,update:null,entry}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null,entry:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update,entry:null})),...entries.map(entry=>({id:`work:${entry.id}`,at:entry.occurred_at,update:null,entry}))].sort((a,b)=>b.at.localeCompare(a.at) || b.id.localeCompare(a.id));
+  const visibleTimeline=showAllActivity ? timeline : timeline.slice(0,3);
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const visibleAttachments=attachments.filter(file=>!file.update_id || !hiddenIds.has(file.update_id));
   const changeVisibility=async(updateId:string,restore:boolean)=>{
@@ -390,26 +393,28 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   const [files,setFiles]=useState<PendingFile[]>([]);
   const [fileError,setFileError]=useState('');
   const [pendingUpdate,setPendingUpdate]=useState('');
+  const [progressHours,setProgressHours]=useState('');
+  const [progressDate,setProgressDate]=useState(()=>localDateTime(new Date().toISOString()));
+  const progressCredits=Number(progressHours)*normalCreditsPerHour;
   const body = <div className="stack details-body"><ProjectVisuals attachments={visibleAttachments} clientId={client.id} taskId={task.id} api={api}/><p className="portal-description">{task.description}</p>
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
     <div className="stack"><div className="row"><h3>Activity</h3>{staff && hiddenUpdates.length>0 && <button type="button" className="portal-update-action" aria-pressed={showHidden} onClick={()=>setShowHidden(value=>!value)}>{showHidden ? 'Hide hidden updates' : `Show ${hiddenUpdates.length} hidden ${hiddenUpdates.length===1 ? 'update' : 'updates'}`}</button>}</div>
       {visibilityError && <p role="alert">{visibilityError}</p>}{visibilityNotice && <p className="caption muted" role="status">{visibilityNotice}</p>}
-      <ol className="portal-timeline">{timeline.map(item=><li key={item.id} className={item.update?.hidden_at ? 'portal-timeline-hidden' : undefined}><div className="row"><strong>{item.entry ? `${item.entry.hours} hours · ${item.entry.credits} credits` : item.update ? statusNames[item.update.status] : 'Project created'}</strong><div className="portal-actions"><time className="caption muted" dateTime={item.at}>{item.entry ? new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(item.at)) : date(item.at)}</time>{staff && item.entry && <button type="button" className="portal-update-action" onClick={()=>setEntryEditing(item.entry)}>Edit entry</button>}{item.update?.hidden_at && <span className="caption portal-status-neutral">Hidden</span>}{staff && item.update && <button type="button" className="portal-update-action" disabled={!!visibilityBusy} onClick={()=>void changeVisibility(item.id,!!item.update?.hidden_at)}>{visibilityBusy===item.id ? 'Saving…' : item.update.hidden_at ? 'Restore' : 'Hide update'}</button>}</div></div>{item.entry ? <p className="portal-description">{item.entry.note}</p> : item.update ? <><p className="portal-description">{item.update.note}</p>{staff && item.update.hidden_at && <p className="caption muted">Hidden {date(item.update.hidden_at)} by {item.update.hidden_actor_email}</p>}<AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol></div>
+      <ol id={`project-activity-${task.id}`} className="portal-timeline">{visibleTimeline.map(item=><li key={item.id} className={item.update?.hidden_at ? 'portal-timeline-hidden' : undefined}><div className="row"><strong>{item.entry ? `${item.entry.hours} hours · ${item.entry.credits} credits` : item.update ? statusNames[item.update.status] : 'Project created'}</strong><div className="portal-actions"><time className="caption muted" dateTime={item.at}>{item.entry ? new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(item.at)) : date(item.at)}</time>{staff && item.entry && <button type="button" className="portal-update-action" onClick={()=>setEntryEditing(item.entry)}>Edit entry</button>}{item.update?.hidden_at && <span className="caption portal-status-neutral">Hidden</span>}{staff && item.update && <button type="button" className="portal-update-action" disabled={!!visibilityBusy} onClick={()=>void changeVisibility(item.id,!!item.update?.hidden_at)}>{visibilityBusy===item.id ? 'Saving…' : item.update.hidden_at ? 'Restore' : 'Hide update'}</button>}</div></div>{item.entry ? <p className="portal-description">{item.entry.note}</p> : item.update ? <><p className="portal-description">{item.update.note}</p>{staff && item.update.hidden_at && <p className="caption muted">Hidden {date(item.update.hidden_at)} by {item.update.hidden_actor_email}</p>}<AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol>{timeline.length>3 && <button type="button" className="portal-update-action" aria-expanded={showAllActivity} aria-controls={`project-activity-${task.id}`} onClick={()=>setShowAllActivity(value=>!value)}>{showAllActivity ? 'Show less' : 'Show more'}</button>}</div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
       if (fileError) throw new Error(fileError);
       // Publish the new status after uploads so moving sections preserves retry state.
       setPendingUpdate(id);
-      const updatedClient = await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}`,'PATCH',{id,status:form.get('status'),note:form.get('note')});
-      try {
-        for (const {id:attachmentId,file} of files) await api(`/clients/${client.id}/tasks/${task.id}/attachments/${attachmentId}?update=${encodeURIComponent(id)}`,'POST',file);
-      } catch(error) {
-        throw new Error(`Progress was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Save progress again to retry; the update and any refund will not be duplicated.`);
-      }
-      setClient(files.length ? await api<ClientDetail>(`/clients/${client.id}`) : updatedClient);
-      setFiles([]); setPendingUpdate('');
+      const chosenDate=String(form.get('occurredAt') || '');
+      if(progressHours && !chosenDate)throw new Error('Choose when the work happened.');
+      setClient(await saveProgress({api,clientId:client.id,taskId:task.id,id,status:String(form.get('status')),note:String(form.get('note')),hours:Number(progressHours),occurredAt:chosenDate ? new Date(chosenDate).toISOString() : undefined,files}));
+      setFiles([]); setPendingUpdate('');setProgressHours('');setProgressDate(localDateTime(new Date().toISOString()));setProjectNotice(progressCredits>0 ? `Progress saved · ${progressCredits} credits deducted.` : 'Progress saved.');
     }}><label>Status<select name="status" defaultValue={task.status}>{Object.entries(statusNames).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Progress note<textarea name="note" rows={3} required maxLength={2000} placeholder="Visible to the client"/></label>
       <AttachmentPicker helpId={`progress-attachments-${task.id}`} filesChanged={setFiles} errorChanged={setFileError}/>
       {fileError && <p role="alert">{fileError}</p>}
+      <div className="fields"><label>Hours worked (optional)<input name="hours" type="number" min={0.25} max={2500} step={0.25} value={progressHours} onChange={event=>setProgressHours(event.target.value)} disabled={task.billing_mode!=='entries'}/></label><label>Work date<input name="occurredAt" type="datetime-local" step={1} required={!!progressHours} value={progressDate} onChange={event=>setProgressDate(event.target.value)} max={localDateTime(new Date().toISOString())}/></label></div>
+      {Number.isSafeInteger(progressCredits) && progressCredits>0 ? <p className="caption muted" role="status">{progressHours} hours = {progressCredits} credits · {formatPrice(progressCredits*creditPriceCents)}. Log only additional work that hasn’t already been recorded.</p> : <p className="caption muted">Leave hours blank to save progress without a charge.</p>}
+      {task.billing_mode!=='entries' && <p className="caption muted">Reallocate this project’s original charge before logging additional hours.</p>}
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div>;
