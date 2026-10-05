@@ -182,6 +182,13 @@ Legacy project-date PATCH remains available only before conversion.
 
 ## Billing and corrections
 
+The portal's Credit activity table displays each dated allocation instead of its
+original project debit, using the work entry's `occurred_at` in UTC. It also uses
+corrected entry dates and notes for new debits. This is a display projection:
+the API's `ledger` remains the immutable record of when balances changed. Do not
+edit or recreate original ledger rows to correct the activity table; read
+`workEntries` and correct unbilled entries through the routes below.
+
 `GET /clients/{client}/billing?period=YYYY-MM` now reviews **only that completed
 UTC month**, rather than cumulative work through its end. Work in September does
 not include unbilled August work. Purchased credits cover the oldest work first;
