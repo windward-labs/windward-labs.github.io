@@ -530,7 +530,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
   return <section id="portal-credit-checkout" className="section stack portal-checkout">
     <div className="row"><h2>Add credits</h2><span className="caption muted">{client.name}</span></div>
     {testMode && <p className="caption muted" role="status">Stripe test mode · No real money is charged.</p>}
-    <p className="muted">Choose credits for design and engineering work.</p>
+    <p className="muted">Choose a credit budget for your next task or project.</p>
     <div className="portal-checkout-layout">
       <fieldset className="portal-pack-options"><legend className="portal-pack-legend">Choose a credit pack</legend>{[...creditPacks].reverse().map(option=>{
         const savings = option.credits * creditPriceCents - option.amountCents;
@@ -550,6 +550,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
         <div className="row"><span>{pack.name} · {pack.credits} credits</span><span>{formatPrice(pack.amountCents)}</span></div>
         <dl className="portal-checkout-balance"><div className="row"><dt>Before purchase</dt><dd>{client.balance<0 ? `${-client.balance} credits owed` : `${client.balance} credits`}</dd></div><div className="row"><dt>After purchase</dt><dd><strong>{client.balance+credits<0 ? `${-(client.balance+credits)} credits owed` : `${client.balance+credits} credits`}</strong></dd></div></dl>
         <p className="caption muted">One-time purchase · USD. Applicable tax is shown at checkout. Fast delivery uses more credits.</p>
+        <p className="caption muted">Examples are a guide. We’ll confirm the scope and credit estimate before starting.</p>
         {client.balance<0 && <p className="caption muted">Purchased credits first cover your {-client.balance} unbilled credits owed.</p>}
         {!!client.invoiced_credits && <p className="caption muted">Issued invoices are paid separately using their payment links.</p>}
         <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
