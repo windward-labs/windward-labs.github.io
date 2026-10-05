@@ -114,6 +114,16 @@ automatic payment confirmation is configured.
 
 ## Production setup
 
+For routine releases, commit the intended changes on `main` and run
+`npm run deploy:production` from the repository root. Use `-- --dry-run` to
+preview. The script detects API/dependency changes, validates them locally,
+applies D1 migrations before deploying the Worker, pushes the exact commit,
+and waits for its GitHub Pages deployment. Frontend-only releases validate
+once in CI. Untracked files are left out; tracked changes must be committed.
+Use `-- --api` to force an API rollout for an already-pushed commit. Errors
+stop the script: if Pages fails after the API deploys, the API is already live.
+The Pages workflow caches installed dependencies and builds/deploys in one job.
+
 The production backend was provisioned on 2026-10-03:
 
 - Worker: `https://windward-service-api.windwardlabs.workers.dev`

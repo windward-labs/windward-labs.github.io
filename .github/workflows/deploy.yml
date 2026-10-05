@@ -15,30 +15,46 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-      - name: Install and Build
-        uses: withastro/action@v3
-        with:
-          node-version: '22'
-        env:
-          PUBLIC_PRIVY_APP_ID: ${{ vars.PUBLIC_PRIVY_APP_ID }}
-          PUBLIC_PRIVY_CLIENT_ID: ${{ vars.PUBLIC_PRIVY_CLIENT_ID }}
-          PUBLIC_SERVICE_API_URL: ${{ vars.PUBLIC_SERVICE_API_URL }}
-      - name: Validate portal
-        run: |
-          npm run typecheck
-          npm test
   deploy:
-    needs: build
     runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Restore installed dependencies
+        id: dependencies
+        uses: actions/cache@v4
+        with:
+          path: node_modules
+          key: ${{ runner.os }}-${{ runner.arch }}-node22-dependencies-${{ hashFiles('package-lock.json') }}
+      - name: Install dependencies
+        if: steps.dependencies.outputs.cache-hit != 'true'
+        run: npm ci
+      - name: Validate portal
+        run: |
+          npm run typecheck &
+          types=$!
+          npm test &
+          tests=$!
+          wait "$types"
+          wait "$tests"
+      - name: Build
+        run: npm run build
+        env:
+          PUBLIC_PRIVY_APP_ID: ${{ vars.PUBLIC_PRIVY_APP_ID }}
+          PUBLIC_PRIVY_CLIENT_ID: ${{ vars.PUBLIC_PRIVY_CLIENT_ID }}
+          PUBLIC_SERVICE_API_URL: ${{ vars.PUBLIC_SERVICE_API_URL }}
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
