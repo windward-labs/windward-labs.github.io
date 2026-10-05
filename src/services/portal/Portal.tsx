@@ -220,7 +220,7 @@ function Billing({actor,client,api,setClient}:{actor:Actor;client:ClientDetail;a
   const [preview,setPreview]=useState<{period:string;credits:number;amountCents:number}|null>(null);
   const [error,setError]=useState('');
   const [busy,setBusy]=useState('');
-  const invoices=client.invoices || [];
+  const invoices=[...(client.invoices || [])].sort((a,b)=>a.period.localeCompare(b.period) || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id));
   const invoiceRevision=invoices.map(invoice=>`${invoice.id}:${invoice.status}`).join(',');
   useEffect(()=>{
     if (!actor.staff) return;
