@@ -111,12 +111,12 @@ AND (OLD.billing_mode='entries' OR EXISTS(SELECT 1 FROM invoices i WHERE i.clien
 BEGIN SELECT RAISE(ABORT,'Work date is covered by an issued invoice'); END;
 
 CREATE TRIGGER work_entry_guard BEFORE INSERT ON work_entries BEGIN
-  SELECT CASE WHEN EXISTS(SELECT 1 FROM tasks WHERE id=NEW.task_id AND status='cancelled') THEN RAISE(ABORT,'Cancelled projects cannot record work') END;
-  SELECT CASE WHEN NEW.kind='debit' AND (SELECT billing_mode FROM tasks WHERE id=NEW.task_id)!='entries' THEN RAISE(ABORT,'Reallocate the original project charge first') END;
-  SELECT CASE WHEN NEW.kind='allocation' AND ((SELECT billing_mode FROM tasks WHERE id=NEW.task_id)!='legacy'
-    OR COALESCE((SELECT SUM(credits) FROM work_entries WHERE task_id=NEW.task_id AND kind='allocation'),0)+NEW.credits>(SELECT original_credits FROM tasks WHERE id=NEW.task_id)) THEN RAISE(ABORT,'Allocation exceeds original charge') END;
-  SELECT CASE WHEN EXISTS(SELECT 1 FROM invoices i JOIN tasks t ON t.client_id=i.client_id WHERE t.id=NEW.task_id AND i.status IN ('issuing','open','paid')
-    AND ((i.attribution_mode='legacy' AND i.cutoff>NEW.occurred_at) OR (i.attribution_mode='monthly' AND i.period=substr(NEW.occurred_at,1,7)))) THEN RAISE(ABORT,'Work entry is covered by an issued invoice') END;
+  SELECT RAISE(ABORT,'Cancelled projects cannot record work') WHERE EXISTS(SELECT 1 FROM tasks WHERE id=NEW.task_id AND status='cancelled');
+  SELECT RAISE(ABORT,'Reallocate the original project charge first') WHERE NEW.kind='debit' AND (SELECT billing_mode FROM tasks WHERE id=NEW.task_id)!='entries';
+  SELECT RAISE(ABORT,'Allocation exceeds original charge') WHERE NEW.kind='allocation' AND ((SELECT billing_mode FROM tasks WHERE id=NEW.task_id)!='legacy'
+    OR COALESCE((SELECT SUM(credits) FROM work_entries WHERE task_id=NEW.task_id AND kind='allocation'),0)+NEW.credits>(SELECT original_credits FROM tasks WHERE id=NEW.task_id));
+  SELECT RAISE(ABORT,'Work entry is covered by an issued invoice') WHERE EXISTS(SELECT 1 FROM invoices i JOIN tasks t ON t.client_id=i.client_id WHERE t.id=NEW.task_id AND i.status IN ('issuing','open','paid')
+    AND ((i.attribution_mode='legacy' AND i.cutoff>NEW.occurred_at) OR (i.attribution_mode='monthly' AND i.period=substr(NEW.occurred_at,1,7))));
 END;
 CREATE TRIGGER work_entry_charge AFTER INSERT ON work_entries WHEN NEW.kind='debit' BEGIN
   INSERT INTO ledger(id,client_id,task_id,kind,credits,note,created_by,actor_email)
