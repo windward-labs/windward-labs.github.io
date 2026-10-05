@@ -549,10 +549,9 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
         <h3>Order summary</h3>
         <div className="row"><span>{pack.name} · {pack.credits} credits</span><span>{formatPrice(pack.amountCents)}</span></div>
         <dl className="portal-checkout-balance"><div className="row"><dt>Before purchase</dt><dd>{client.balance<0 ? `${-client.balance} credits owed` : `${client.balance} credits`}</dd></div><div className="row"><dt>After purchase</dt><dd><strong>{client.balance+credits<0 ? `${-(client.balance+credits)} credits owed` : `${client.balance+credits} credits`}</strong></dd></div></dl>
-        <p className="caption muted">One-time purchase · USD. Applicable tax is shown at checkout. Fast delivery uses more credits.</p>
-        <p className="caption muted">Examples are a guide. We’ll confirm the scope and credit estimate before starting.</p>
+        <p className="caption muted">We’ll confirm scope before starting.</p>
         {client.balance<0 && <p className="caption muted">Purchased credits first cover your {-client.balance} unbilled credits owed.</p>}
-        {!!client.invoiced_credits && <p className="caption muted">Issued invoices are paid separately using their payment links.</p>}
+        {!!client.invoiced_credits && <p className="caption muted">Pay issued invoices separately.</p>}
         <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
         <p className="caption muted">{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</p>
       </div>
