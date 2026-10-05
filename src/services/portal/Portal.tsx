@@ -546,14 +546,10 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
         </label>;
       })}</fieldset>
       <div className="stack portal-order-summary" aria-live="polite" aria-atomic="true">
-        <h3>Order summary</h3>
+        <div className="row"><h3>Order summary</h3><span className="portal-info portal-checkout-info"><button type="button" className="portal-info-button" aria-label="About credit purchases" aria-describedby="checkout-purchase-info">ⓘ</button><span id="checkout-purchase-info" role="tooltip"><span>We’ll confirm scope before starting.</span>{client.balance<0 && <span>Purchased credits first cover your {-client.balance} unbilled credits owed.</span>}{!!client.invoiced_credits && <span>Pay issued invoices separately.</span>}<span>{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</span></span></span></div>
         <div className="row"><span>{pack.name} · {pack.credits} credits</span><span>{formatPrice(pack.amountCents)}</span></div>
         <dl className="portal-checkout-balance"><div className="row"><dt>Before purchase</dt><dd>{client.balance<0 ? `${-client.balance} credits owed` : `${client.balance} credits`}</dd></div><div className="row"><dt>After purchase</dt><dd><strong>{client.balance+credits<0 ? `${-(client.balance+credits)} credits owed` : `${client.balance+credits} credits`}</strong></dd></div></dl>
-        <p className="caption muted">We’ll confirm scope before starting.</p>
-        {client.balance<0 && <p className="caption muted">Purchased credits first cover your {-client.balance} unbilled credits owed.</p>}
-        {!!client.invoiced_credits && <p className="caption muted">Pay issued invoices separately.</p>}
         <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
-        <p className="caption muted">{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</p>
       </div>
     </div>
   </section>;
