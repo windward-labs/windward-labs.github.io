@@ -154,7 +154,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
       <section id="active-projects" className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="record-work-form" onClick={()=>{setWorkSuccess(null);setShowWorkForm(true);}}>New Project</button>}</div></div>
-      {workSuccess && <ProjectCreatedToast clientId={client.id} success={workSuccess} onDismiss={()=>setWorkSuccess(null)}/>}
+      {workSuccess && <ProjectCreatedToast success={workSuccess} onDismiss={()=>setWorkSuccess(null)}/>}
       {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
@@ -327,7 +327,7 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
 function TaskStatus({task}:{task:Task}) {
   return <span className="caption portal-task-meta"><span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span><span className="muted">{task.credits} credits{task.status==='cancelled' ? ' returned' : ''}</span></span>;
 }
-function ProjectCreatedToast({clientId,success,onDismiss}:{clientId:string;success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
+function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
   const [hovered,setHovered]=useState(false);
   const [focused,setFocused]=useState(false);
   const paused=hovered || focused;
@@ -339,8 +339,8 @@ function ProjectCreatedToast({clientId,success,onDismiss}:{clientId:string;succe
     return ()=>window.clearTimeout(timer);
   },[success.id,paused]);
   return createPortal(<div className="portal-project-toast" onMouseEnter={()=>setHovered(true)} onMouseLeave={()=>setHovered(false)} onFocus={()=>setFocused(true)} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))setFocused(false);}}>
-    <div role="status"><strong>✓ Project created</strong><p>{success.credits} credits deducted · {Math.abs(success.balance)} credits {success.balance<0 ? 'owed' : 'available'}</p></div>
-    <a href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(success.id)}`}>View project</a>
+    <svg className="portal-toast-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <div role="status"><strong>Project created</strong><p>{success.credits} credits deducted · {Math.abs(success.balance)} credits {success.balance<0 ? 'owed' : 'available'}</p></div>
     <button type="button" className="portal-toast-dismiss" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
   </div>,document.body);
 }

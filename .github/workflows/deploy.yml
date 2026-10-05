@@ -37,6 +37,8 @@ jobs:
       - name: Install dependencies
         if: steps.dependencies.outputs.cache-hit != 'true'
         run: npm ci
+      - name: Generate Astro types
+        run: npx astro sync
       - name: Validate portal
         run: |
           npm run typecheck &
