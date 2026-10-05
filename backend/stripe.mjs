@@ -3,6 +3,7 @@ import { PortalError, id } from './domain.mjs';
 import { stripeCreditPacks } from '../src/services/stripe-catalog.mjs';
 
 const testPrices = {
+  192:'price_1UNLBgLFTZ7EIElERZnxNG1I',
   8:'price_1UMwWLLFTZ7EIElECMrKEp3m',
   16:'price_1UMiLILFTZ7EIElEShnvpadu',
   32:'price_1UMiMjLFTZ7EIElE1yX0D8qR',

@@ -7,6 +7,7 @@ if (env.STRIPE_MODE!=='test') throw new Error('This script configures test links
 const stripe=stripeClient(env);
 const links=await stripe.paymentLinks.list({limit:100});
 const expected = {
+  192:'https://buy.stripe.com/test_dRmcN62M24cueqkeU8eME04',
   16:'https://buy.stripe.com/test_fZu8wQeuKdN4cic13ieME00',
   32:'https://buy.stripe.com/test_6oU8wQfyO8sK3LG8vKeME01',
   64:'https://buy.stripe.com/test_aFabJ2dqG6kC5TO7rGeME02',

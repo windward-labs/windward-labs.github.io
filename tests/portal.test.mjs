@@ -1007,3 +1007,23 @@ test('fixed charges respect issued billing locks while internal hours remain non
   const before=(await f.call(staff,`/clients/${clientId}`)).data.balance;
   assert.equal((await f.call(staff,`${path}/time-entries`,'POST',{id:crypto.randomUUID(),occurredAt:charge.occurredAt,hours:20,note:'Actual effort'})).data.balance,before);
 });
+
+test('192-credit Embedded Design and legacy 64-credit purchases fulfill once at their exact prices',async()=>{
+  const testPrices={192:'price_1UNLBgLFTZ7EIElERZnxNG1I',64:'price_1UMiOLLFTZ7EIElE4bh23C35'};
+  for(const credits of [192,64])for(const mode of ['test','live']) {
+    const f=fixture(),clientId=await f.client(),session=paidSession(clientId);
+    const amount=credits*7500;
+    session.livemode=mode==='live';session.id=`cs_${mode}_pack${credits}`;
+    session.amount_subtotal=amount;session.total_details.amount_tax=0;
+    session.line_items.data[0]={price:{id:mode==='live' ? stripeCreditPacks[credits].priceId : testPrices[credits]},quantity:1,currency:'usd',amount_subtotal:amount,amount_discount:0,amount_total:amount};
+    const stripe={checkout:{sessions:{retrieve:async()=>structuredClone(session)}}},env={STRIPE_MODE:mode};
+    await Promise.all([fulfillCheckout(env,f.DB,session.id,clientId,stripe),fulfillCheckout(env,f.DB,session.id,clientId,stripe)]);
+    const account=(await f.call(contact,`/clients/${clientId}`)).data;
+    assert.equal(account.balance,credits);assert.equal(account.ledger.length,1);
+    session.payment_intent='pi_wrongamount';session.amount_subtotal=amount-7500;
+    await assert.rejects(fulfillCheckout(env,f.DB,session.id,clientId,stripe),/fixed credit pack/);
+    assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,credits);
+    if(credits===192)assert.equal((await f.fund(clientId,'pi_verified192',192)).status,200);
+    f.sqlite.close();
+  }
+});

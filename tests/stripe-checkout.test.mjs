@@ -12,7 +12,7 @@ test('development checkout fails closed without a genuine test link', () => {
 });
 
 test('production ignores test configuration and uses the live catalog', () => {
-  for (const credits of [8,16,32,64]) {
+  for (const credits of [8,16,32,64,192]) {
     assert.equal(checkoutLink(credits, false, {[credits]:'https://buy.stripe.com/test_abc'}), stripeCreditPacks[credits].paymentLink);
   }
 });

@@ -286,7 +286,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const email = normalizeEmail(body.email);
       await query(db,'DELETE FROM client_members WHERE client_id=? AND email=?',clientId,email).run();
     } else if (resource === 'purchases' && method === 'POST' && !taskId) {
-      if (![8,16,32,64].includes(body.credits)) throw new PortalError(400,'Choose a purchased credit pack.');
+      if (![8,16,32,64,192].includes(body.credits)) throw new PortalError(400,'Choose a purchased credit pack.');
       const reference = text(body.reference,'Stripe payment reference',200);
       if (!/^pi_[A-Za-z0-9]+$/.test(reference)) throw new PortalError(400,'Use the Stripe PaymentIntent ID (pi_) from the successful payment.');
       const note = text(body.note,'Payment verification note');
