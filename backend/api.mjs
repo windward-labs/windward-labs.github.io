@@ -4,13 +4,14 @@ import {authorizeAgent,requireAgentScope} from './agent-auth.mjs';
 import { paymentDocument } from './payment-documents.mjs';
 import { handleAttachment } from './attachments.mjs';
 import { invoicedCreditsSql, ledgerEventDate, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
+import {workEntries,addWorkEntry,reallocateWork,correctWorkEntry} from './work-entries.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const query = (db, sql, ...values) => db.prepare(sql).bind(...values);
-async function bodyOf(request) {
+async function bodyOf(request,max=12000) {
   if (!request.headers.get('Content-Type')?.startsWith('application/json')) throw new PortalError(415,'Send JSON.');
   const raw = await request.text();
-  if (raw.length > 12000) throw new PortalError(413,'Request too large.');
+  if (raw.length > max) throw new PortalError(413,'Request too large.');
   try { const body = JSON.parse(raw); if (!body || Array.isArray(body) || typeof body !== 'object') throw new Error(); return body; }
   catch { throw new PortalError(400,'Invalid JSON.'); }
 }
@@ -34,7 +35,7 @@ async function detail(db, actor, clientId) {
     query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
     query(db,'SELECT d.* FROM project_date_changes d JOIN tasks t ON t.id=d.task_id WHERE t.client_id=? AND ?=1 ORDER BY d.created_at,d.id',clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
+  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
 }
 
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
@@ -117,6 +118,19 @@ async function handleAuthorizedApi(request, env, authenticate) {
       ]);
       return json(await detail(db,actor,clientId),201);
     }
+    const entryRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/work-entries(?:\/(reallocate|[^/]+))?$/);
+    if(entryRoute) {
+      const clientId=id(entryRoute[1]),taskId=id(entryRoute[2]),action=entryRoute[3];
+      await clientAccess(db,actor,clientId);
+      if(!await query(db,'SELECT id FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first())throw new PortalError(404,'Project not found.');
+      if(method==='GET' && !action)return json({workEntries:await workEntries(db,actor,clientId,taskId)});
+      requireStaff(actor);
+      if(method==='POST' && !action)await addWorkEntry(db,actor,clientId,taskId,await bodyOf(request));
+      else if(method==='POST' && action==='reallocate')await reallocateWork(db,actor,clientId,taskId,await bodyOf(request,300000));
+      else if(method==='PATCH' && action && action!=='reallocate')await correctWorkEntry(db,actor,clientId,taskId,id(action),await bodyOf(request));
+      else throw new PortalError(405,'Method not allowed.');
+      return json(await detail(db,actor,clientId));
+    }
     const workDateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/date$/);
     if(workDateRoute) {
       if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
@@ -125,6 +139,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const clientId=id(workDateRoute[1]),taskId=id(workDateRoute[2]);await clientAccess(db,actor,clientId);
       const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
       if(!task)throw new PortalError(404,'Project not found.');
+      if(task.billing_mode==='entries')throw new PortalError(409,'Correct the dated work entries; a project date does not determine their billing month.');
       const body=await bodyOf(request),changeId=id(body.id),occurredAt=workTimestamp(body.occurredAt);
       if(Object.keys(body).some(key=>!['id','occurredAt','expectedVersion','emailMessageId'].includes(key)))throw new PortalError(400,'This endpoint only changes the project work date.');
       if(!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion<0)throw new PortalError(400,'Send the project details_version as expectedVersion.');
@@ -265,10 +280,10 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const work = workInput(body);
       const existing = await query(db,'SELECT * FROM tasks WHERE id=?',work.id).first();
       if (existing) {
-        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy || (work.occurredAt && (existing.occurred_at ?? existing.created_at)!==work.occurredAt)) throw new PortalError(409,'Work record ID already used.');
+        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.original_credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy || (work.occurredAt && (existing.occurred_at ?? existing.created_at)!==work.occurredAt)) throw new PortalError(409,'Work record ID already used.');
         if(work.emailMessageId && (await query(db,'SELECT source_message_id FROM project_date_changes WHERE id=?',work.id).first())?.source_message_id!==work.emailMessageId)throw new PortalError(409,'Work record source already used.');
       } else {
-        const statements=[query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email,work.occurredAt)];
+        const statements=[query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email,occurred_at,billing_mode,original_credits) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email,work.occurredAt,work.credits ? 'legacy' : 'entries',work.credits)];
         if(work.occurredAt)statements.push(query(db,`INSERT INTO project_date_changes (id,task_id,previous_date,occurred_at,source_message_id,created_by,actor_email) SELECT ?,id,created_at,occurred_at,?,?,? FROM tasks WHERE id=?`,work.id,work.emailMessageId,actor.id,actor.email,work.id));
         await db.batch(statements);
       }
@@ -279,6 +294,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
     if (/Work date is covered by an issued invoice/i.test(String(error))) return json({error:'An issued invoice covers this work date. Resolve that invoice before changing its billing attribution.'},409);
+    if (/Work entry is covered by an issued invoice|Cancelled projects cannot record work|Allocation exceeds original charge|Reallocate the original project charge first|Work entry charge is immutable/i.test(String(error)))return json({error:String(error).replace(/^.*?(Work entry is covered|Cancelled projects|Allocation exceeds|Reallocate the original|Work entry charge)/,'$1')},409);
     if (/UNIQUE constraint failed: invoices.client_id, invoices.period/i.test(String(error))) return json({error:'This month already has an invoice. Open the existing bill before creating another.'},409);
     if (/UNIQUE constraint/i.test(String(error))) return json({error:'This record or payment reference already exists. Refresh before trying again.'},409);
     console.error('Portal request failed',error instanceof Error ? error.name : 'Unknown error');

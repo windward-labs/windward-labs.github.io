@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
 import { creditPacks, creditPriceCents, formatPrice, normalCreditsPerHour } from '../pricing.mjs';
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
-import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice } from './types';
+import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice, WorkEntry } from './types';
 
 const statusNames: Record<WorkStatus, string> = { queued: 'Queued', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
 const date = (value: string) => new Intl.DateTimeFormat('en-US', { month:'short', day:'numeric', year:'numeric' }).format(new Date(value));
@@ -158,9 +158,13 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
         if (fileError) throw new Error(fileError);
         const credits = Number(form.get('hours')) * normalCreditsPerHour;
-        if (!Number.isSafeInteger(credits) || credits < 1 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500.');
+        if (!Number.isSafeInteger(credits) || credits < 0 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500, or leave blank.');
         const workDate=String(form.get('occurredAt') || '');
-        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits,status:form.get('status'),...(workDate ? {occurredAt:new Date(workDate).toISOString()} : {})});
+        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:0,status:form.get('status')});
+        if(credits>0) {
+          const occurredAt=workDate ? new Date(workDate).toISOString() : savedClient.tasks.find(task=>task.id===id)!.created_at;
+          savedClient=await api<ClientDetail>(`/clients/${client.id}/tasks/${id}/work-entries`,'POST',{id,occurredAt,hours:credits/normalCreditsPerHour,credits,note:form.get('description')});
+        }
         setClient(savedClient);
         try {
           for (const {id:attachmentId,file} of workFiles) await api(`/clients/${client.id}/tasks/${id}/attachments/${attachmentId}`,'POST',file);
@@ -177,10 +181,10 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
-        <div className="fields"><div><span className="portal-field-label"><label htmlFor="work-hours">Hours of work</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" required min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
+        <div className="fields"><div><span className="portal-field-label"><label htmlFor="work-hours">Initial hours (optional)</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div><label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
         {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
         <label>Work date (optional)<input type="datetime-local" name="occurredAt" step={1} max={localDateTime(new Date().toISOString())}/></label><p className="caption muted">Use when the work happened. Leave blank to use today. Billing months use UTC.</p>
-        <p className="caption muted">Credits are deducted on submit and returned if cancelled.</p>
+        <p className="caption muted">Initial hours create a dated work entry. Leave blank to start without a charge.</p>
       </MutationForm></ProjectDialog>}
         {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div>}
       </section>
@@ -359,6 +363,7 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   const [projectNotice,setProjectNotice]=useState('');
   const [dateEditing,setDateEditing]=useState<Task|null>(null);
   const [dateSaving,setDateSaving]=useState(false);
+  const [entryEditing,setEntryEditing]=useState<WorkEntry|null>(null);
   const [showHidden,setShowHidden]=useState(false);
   const [visibilityBusy,setVisibilityBusy]=useState('');
   const [visibilityError,setVisibilityError]=useState('');
@@ -367,7 +372,8 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   const hiddenUpdates=projectUpdates.filter(update=>update.hidden_at);
   const hiddenIds=new Set(hiddenUpdates.map(update=>update.id));
   const updates = projectUpdates.filter(update=>!update.hidden_at || (staff && showHidden));
-  const timeline = [{id:`project:${task.id}`,at:task.occurred_at || task.created_at,update:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
+  const entries=(client.workEntries || []).filter(entry=>entry.task_id===task.id);
+  const timeline = [{id:`project:${task.id}`,at:task.created_at,update:null,entry:null},...updates.map(update=>({id:update.id,at:update.occurred_at || update.created_at,update,entry:null})),...entries.map(entry=>({id:`work:${entry.id}`,at:entry.occurred_at,update:null,entry}))].sort((a,b)=>a.at.localeCompare(b.at) || a.id.localeCompare(b.id));
   const attachments = (client.attachments || []).filter(attachment=>attachment.task_id===task.id);
   const visibleAttachments=attachments.filter(file=>!file.update_id || !hiddenIds.has(file.update_id));
   const changeVisibility=async(updateId:string,restore:boolean)=>{
@@ -386,7 +392,7 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
     <AttachmentList attachments={attachments.filter(file=>!file.update_id)} clientId={client.id} taskId={task.id} api={api}/>
     <div className="stack"><div className="row"><h3>Activity</h3>{staff && hiddenUpdates.length>0 && <button type="button" className="portal-update-action" aria-pressed={showHidden} onClick={()=>setShowHidden(value=>!value)}>{showHidden ? 'Hide hidden updates' : `Show ${hiddenUpdates.length} hidden ${hiddenUpdates.length===1 ? 'update' : 'updates'}`}</button>}</div>
       {visibilityError && <p role="alert">{visibilityError}</p>}{visibilityNotice && <p className="caption muted" role="status">{visibilityNotice}</p>}
-      <ol className="portal-timeline">{timeline.map(item=><li key={item.id} className={item.update?.hidden_at ? 'portal-timeline-hidden' : undefined}><div className="row"><strong>{item.update ? statusNames[item.update.status] : task.occurred_at ? 'Work recorded' : 'Project recorded'}</strong><div className="portal-actions"><time className="caption muted" dateTime={item.at}>{date(item.at)}</time>{item.update?.hidden_at && <span className="caption portal-status-neutral">Hidden</span>}{staff && item.update && <button type="button" className="portal-update-action" disabled={!!visibilityBusy} onClick={()=>void changeVisibility(item.id,!!item.update?.hidden_at)}>{visibilityBusy===item.id ? 'Saving…' : item.update.hidden_at ? 'Restore' : 'Hide update'}</button>}</div></div>{item.update ? <><p className="portal-description">{item.update.note}</p>{staff && item.update.hidden_at && <p className="caption muted">Hidden {date(item.update.hidden_at)} by {item.update.hidden_actor_email}</p>}<AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol></div>
+      <ol className="portal-timeline">{timeline.map(item=><li key={item.id} className={item.update?.hidden_at ? 'portal-timeline-hidden' : undefined}><div className="row"><strong>{item.entry ? `${item.entry.hours} hours · ${item.entry.credits} credits` : item.update ? statusNames[item.update.status] : 'Project created'}</strong><div className="portal-actions"><time className="caption muted" dateTime={item.at}>{item.entry ? new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(item.at)) : date(item.at)}</time>{staff && item.entry && <button type="button" className="portal-update-action" onClick={()=>setEntryEditing(item.entry)}>Edit entry</button>}{item.update?.hidden_at && <span className="caption portal-status-neutral">Hidden</span>}{staff && item.update && <button type="button" className="portal-update-action" disabled={!!visibilityBusy} onClick={()=>void changeVisibility(item.id,!!item.update?.hidden_at)}>{visibilityBusy===item.id ? 'Saving…' : item.update.hidden_at ? 'Restore' : 'Hide update'}</button>}</div></div>{item.entry ? <p className="portal-description">{item.entry.note}</p> : item.update ? <><p className="portal-description">{item.update.note}</p>{staff && item.update.hidden_at && <p className="caption muted">Hidden {date(item.update.hidden_at)} by {item.update.hidden_actor_email}</p>}<AttachmentList attachments={attachments.filter(file=>file.update_id===item.id)} clientId={client.id} taskId={task.id} api={api}/></> : <p className="caption muted">Requested by {task.requested_by} via {task.source}</p>}</li>)}</ol></div>
     {staff && (task.status!=='cancelled' || pendingUpdate) && <MutationForm label="Save progress" submit={async(form,id)=>{
       if (fileError) throw new Error(fileError);
       // Publish the new status after uploads so moving sections preserves retry state.
@@ -407,7 +413,12 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
   </div>;
   return <section className="section stack portal-project-page"><div className="row"><div><h1>{task.title}</h1><p className="caption muted">{client.name}</p></div><div className="portal-actions"><TaskStatus task={task}/>{staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="edit-project-details" onClick={()=>{setProjectNotice('');setEditing(task);}}>Edit details</button>}</div></div>
     {projectNotice && <p className="caption portal-edit-success" role="status">{projectNotice}</p>}
-    <div className="portal-actions caption muted"><span>Work date · {date(task.occurred_at || task.created_at)}</span>{staff && <button type="button" className="portal-update-action" aria-haspopup="dialog" aria-controls="edit-project-date" onClick={()=>{setProjectNotice('');setDateEditing(task);}}>Change work date</button>}</div>
+    {task.billing_mode!=='entries' && <div className="portal-actions caption muted"><span>Work date · {date(task.occurred_at || task.created_at)}</span>{staff && <button type="button" className="portal-update-action" aria-haspopup="dialog" aria-controls="edit-project-date" onClick={()=>{setProjectNotice('');setDateEditing(task);}}>Change work date</button>}</div>}
+    {staff && <ProjectDialog id="edit-work-entry" title="Edit work entry" open={!!entryEditing} busy={dateSaving} onClose={()=>setEntryEditing(null)}>{entryEditing && <MutationForm label="Save changes" reset={false} onBusyChange={setDateSaving} submit={async(form,id)=>{
+      const chosen=String(form.get('occurredAt')),original=entryEditing.occurred_at;
+      setClient(await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/work-entries/${entryEditing.id}`,'PATCH',{id,expectedVersion:entryEditing.version,occurredAt:chosen===localDateTime(original) ? original : new Date(chosen).toISOString(),note:form.get('note')}));
+      setEntryEditing(null);setProjectNotice('Work entry updated.');
+    }}><label>Work date<input name="occurredAt" type="datetime-local" step={1} required defaultValue={localDateTime(entryEditing.occurred_at)} max={localDateTime(new Date().toISOString())}/></label><label>Work summary<textarea name="note" rows={3} required maxLength={2000} defaultValue={entryEditing.note}/></label><p className="caption muted">{entryEditing.hours} hours · {entryEditing.credits} credits. Billing uses UTC; billed entries cannot be changed.</p></MutationForm>}</ProjectDialog>}
     {staff && <ProjectDialog id="edit-project-date" title="Change work date" open={!!dateEditing} busy={dateSaving} onClose={()=>setDateEditing(null)}>{dateEditing && <MutationForm label="Save date" reset={false} onBusyChange={setDateSaving} submit={async(form,id)=>{
       const original=dateEditing.occurred_at || dateEditing.created_at,chosen=String(form.get('occurredAt'));
       const occurredAt=chosen===localDateTime(original) ? original : new Date(chosen).toISOString();

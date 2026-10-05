@@ -105,7 +105,7 @@ automatic payment confirmation is configured.
   canonical PaymentIntent ID (`pi_...`). The ID is unique across all
   clients. The webhook and authenticated return page share this idempotent
   operation; neither can credit the same PaymentIntent twice.
-- A work record deducts its credits immediately, including queued work. Updating
+- A dated work entry deducts its credits once. Creating project metadata is free. Updating
   progress never deducts again. Cancellation returns the charge once and closes
   the record. Work can exceed prepaid credits; the portal shows credits owed
   and the form warns staff before submission. Ledger entries remain immutable.
@@ -177,12 +177,17 @@ in **Preparing invoice**; **Retry issuing invoice** resumes its stored Stripe ID
 and idempotency keys without moving credits twice. Voiding an unpaid bill returns
 its credits to the unbilled balance; paid invoices cannot be voided here.
 
-Project creation accepts `occurredAt` and an optional private `emailMessageId`.
-Existing projects can be corrected through the work-date PATCH endpoint or
-**Change work date** on the project page. Corrections retain the original server
-timestamps and debit, change monthly attribution without a second charge, and
-are locked when an issued invoice covers the affected date. Billing months use
-UTC. See the agent guide for exact request bodies and retry/version semantics.
+Project creation without credits starts an uncharged project. Record actual work
+with dated `work-entries`: each entry debits once, and its UTC month determines
+billing. A project can span multiple months. Staff can edit unbilled entry dates
+and notes from the project timeline. Sources stay private; notes are client-visible.
+
+For existing upfront charges, the staff-only reallocation endpoint atomically
+splits the whole original charge into dated entries without changing balances or
+ledger rows. Billing then excludes the original debit and counts only entries.
+Reviews cover the selected month, not cumulative prior-month debt. Issued/paid
+invoices protect their attributed entries; stale drafts fail before Stripe writes.
+The agent guide documents request bodies, scopes and retry/version semantics.
 
 Staff can hide duplicate/test progress updates and restore them from **Show
 hidden updates**. Clients cannot read hidden updates or their attachments; notes,

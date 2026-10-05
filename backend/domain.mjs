@@ -18,8 +18,8 @@ export function id(value) {
   return value;
 }
 export function workInput(body) {
-  const credits = body.credits;
-  if (!Number.isSafeInteger(credits) || credits <= 0 || credits > 10000) throw new PortalError(400, 'Use a whole credit amount between 1 and 10,000.');
+  const credits = body.credits ?? 0;
+  if (!Number.isSafeInteger(credits) || credits < 0 || credits > 10000) throw new PortalError(400, 'Use a whole credit amount between 0 and 10,000. Omit credits to charge only dated work entries.');
   if (!['email','text','call','meeting','other'].includes(body.source)) throw new PortalError(400, 'Choose a source channel.');
   if (!['queued','in_progress','completed'].includes(body.status)) throw new PortalError(400, 'Choose a work status.');
   if(['billingDate','startedAt','billingPeriod','createdAt','date'].some(key=>body[key]!==undefined))throw new PortalError(400,'Use occurredAt for the work date.');

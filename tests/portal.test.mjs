@@ -32,6 +32,9 @@ function fixture(extraEnv = {}) {
   sqlite.exec(readFileSync(new URL('../backend/migrations/0007_project_edits.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0008_hidden_updates.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0009_work_dates.sql',import.meta.url),'utf8'));
+  sqlite.exec('BEGIN');
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0010_work_entries.sql',import.meta.url),'utf8'));
+  sqlite.exec('COMMIT');
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -71,6 +74,139 @@ function attachmentStorage() {
   const objects = new Map();
   return {objects,async put(key,bytes) { objects.set(key,bytes.slice()); },async get(key) { const bytes=objects.get(key); return bytes ? {body:bytes} : null; }};
 }
+
+function datedEntry(credits,month='2025-08',sourceId=crypto.randomUUID()) {
+  return {id:crypto.randomUUID(),occurredAt:`${month}-15T12:00:00Z`,hours:credits/4,credits,note:'Design work requested by the client.',source:{type:'email',id:sourceId}};
+}
+test('work-entry migration preserves existing balances, immutable charges and linked project data',()=>{
+  const db=new DatabaseSync(':memory:');
+  for(const name of ['0001_portal','0002_attachments','0003_overage_billing','0004_progress_attachments','0005_agents','0006_update_dates','0007_project_edits','0008_hidden_updates','0009_work_dates']) {
+    db.exec('BEGIN');db.exec(readFileSync(new URL(`../backend/migrations/${name}.sql`,import.meta.url),'utf8'));db.exec('COMMIT');
+  }
+  db.exec("INSERT INTO clients(id,name) VALUES('client','Example'); INSERT INTO tasks(id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email) VALUES('task','client','Existing','Brief','Client','email',87,'in_progress','staff','staff@windwardlabs.xyz'); INSERT INTO task_updates(id,task_id,status,note,created_by,actor_email) VALUES('update','task','in_progress','Progress','staff','staff@windwardlabs.xyz'); INSERT INTO update_sources(update_id,task_id,source_type,external_id) VALUES('update','task','email','private-message'); INSERT INTO attachments(id,task_id,update_id,name,content_type,size,sha256,created_by,actor_email) VALUES('file','task','update','test.txt','text/plain',1,'hash','staff','staff@windwardlabs.xyz');");
+  const before=db.prepare('SELECT * FROM ledger').all();
+  db.exec('BEGIN');db.exec(readFileSync(new URL('../backend/migrations/0010_work_entries.sql',import.meta.url),'utf8'));db.exec('COMMIT');
+  assert.deepEqual(db.prepare('SELECT * FROM ledger').all(),before);
+  assert.equal(db.prepare('SELECT balance FROM clients').get().balance,-87);
+  assert.equal(db.prepare('SELECT original_credits FROM tasks').get().original_credits,87);
+  assert.equal(db.prepare('SELECT task_id FROM attachments').get().task_id,'task');
+  assert.equal(db.prepare('SELECT external_id FROM update_sources').get().external_id,'private-message');
+  assert.deepEqual(db.prepare('PRAGMA foreign_key_check').all(),[]);
+  // Old Worker insertion remains valid during the migration/deploy interval.
+  db.exec("INSERT INTO tasks(id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email) VALUES('old-worker','client','Old version','Brief','Client','email',4,'in_progress','staff','staff@windwardlabs.xyz');");
+  assert.equal(db.prepare("SELECT original_credits FROM tasks WHERE id='old-worker'").get().original_credits,4);
+  assert.equal(db.prepare('SELECT balance FROM clients').get().balance,-91);
+  db.close();
+});
+test('dated entries charge once by UUID and source, preserve source privacy and enforce account/scoped access',async()=>{
+  const f=fixture(),clientId=await f.client(),task=f.work(0),key=await agentKey(f);
+  const created=await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal(created.status,200);assert.equal(created.data.balance,0);assert.equal(created.data.ledger.length,0);
+  const path=`/clients/${clientId}/tasks/${task.id}/work-entries`,entry=datedEntry(20);
+  const limited=await agentKey(f,['clients:read','projects:update']);
+  assert.equal((await f.call(contact,path,'POST',entry)).status,403);
+  assert.equal((await f.call(limited.actor,path,'POST',entry)).status,403);
+  const [first,retry]=await Promise.all([f.call(key.actor,path,'POST',entry),f.call(key.actor,path,'POST',entry)]);
+  assert.equal(first.status,200);assert.equal(retry.status,200);
+  assert.equal((await f.call(key.actor,path,'POST',{...entry,id:crypto.randomUUID()})).status,200);
+  assert.equal((await f.call(key.actor,path,'POST',{...entry,credits:24,hours:6})).status,409);
+  assert.equal((await f.call(key.actor,path,'POST',{...entry,id:crypto.randomUUID(),note:'Different work'})).status,409);
+  const visible=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(visible.balance,-20);assert.equal(visible.tasks[0].credits,20);assert.equal(visible.workEntries.length,1);
+  assert.equal(visible.ledger.length,1);assert.equal(visible.workEntries[0].note,entry.note);
+  assert.equal(JSON.stringify(visible).includes(entry.source.id),false);
+  assert.equal((await f.call(staff,path)).data.workEntries[0].source_id,entry.source.id);
+  assert.equal((await f.call(outsider,path)).status,404);
+  const other=await f.client();assert.equal((await f.call(key.actor,`/clients/${other}/tasks/${task.id}/work-entries`,'POST',entry)).status,404);
+  for(const invalid of [{hours:5.1},{hours:6},{credits:0},{occurredAt:'2099-08-15T12:00:00Z'},{source:{type:'email'}}])assert.equal((await f.call(key.actor,path,'POST',{...entry,id:crypto.randomUUID(),...invalid})).status,400);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task)).status,200);
+});
+test('227 legacy credits split into August 160 and September 67 with no balance or original ledger change',async()=>{
+  const f=fixture(),clientId=await f.client(),key=await agentKey(f);f.at('2025-10-04T22:00:00.000Z');
+  const projects=[['Career Tab',81,6],['Ribbit Wisdom Cards',40,32],['Site Updates & Edits',19,29],['Annual Meeting Invite',20,0]];
+  const allocations=[];
+  for(const [title,august,september] of projects) {
+    const task={...f.work(august+september),title};
+    assert.equal((await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task)).status,200);
+    allocations.push({task,body:{id:crypto.randomUUID(),expectedCredits:task.credits,entries:[datedEntry(august),...(september ? [datedEntry(september,'2025-09')] : [])]}});
+  }
+  const ledger=f.sqlite.prepare('SELECT * FROM ledger ORDER BY rowid').all();
+  assert.equal((await billingPreview(f.DB,clientId,'2025-10')).credits,227);
+  for(const {task,body} of allocations) {
+    const path=`/clients/${clientId}/tasks/${task.id}/work-entries/reallocate`;
+    assert.equal((await f.call(contact,path,'POST',body)).status,403);
+    assert.equal((await f.call(key.actor,path,'POST',{...body,entries:[datedEntry(task.credits+1)]})).status,400);
+    assert.equal((await f.call(key.actor,path,'POST',{...body,entries:[datedEntry(task.credits-1)]})).status,400);
+    const result=await f.call(key.actor,path,'POST',body);assert.equal(result.status,200,JSON.stringify(result.data));assert.equal(result.data.balance,-227);
+    assert.equal((await f.call(key.actor,path,'POST',body)).status,200);
+    assert.equal((await f.call(key.actor,path,'POST',{...body,id:crypto.randomUUID()})).status,409);
+  }
+  assert.deepEqual(f.sqlite.prepare('SELECT * FROM ledger ORDER BY rowid').all(),ledger);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,160);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,67);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-10')).credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).amountCents,1200000);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-09')).amountCents,502500);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM work_entries').get().n,7);
+  // The excluded 30-hour T item is never inserted or charged.
+  assert.equal(f.sqlite.prepare('SELECT SUM(credits) AS credits FROM billable_work').get().credits,227);
+  const stripe=invoiceStripe(),september={id:crypto.randomUUID(),period:'2025-09',email:contact.email,credits:67};
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/invoices`,'POST',september)).status,200);
+  await issueInvoice(testStripeEnv,f.DB,clientId,september.id,stripe);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,160);assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,0);
+  const august={...september,id:crypto.randomUUID(),period:'2025-08',credits:160};
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/invoices`,'POST',august)).status,200);
+  await issueInvoice(testStripeEnv,f.DB,clientId,august.id,stripe);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,0);
+  await voidInvoice(testStripeEnv,f.DB,clientId,september.id,stripe);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,67);
+});
+test('unbilled entry corrections are versioned and audited; billed entries cannot move, and voiding unlocks unpaid entries',async()=>{
+  const f=fixture(),clientId=await f.client(),task=f.work(0),entry=datedEntry(8);await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/work-entries`;await f.call(staff,path,'POST',entry);
+  const change={id:crypto.randomUUID(),expectedVersion:0,occurredAt:'2025-09-01T00:00:00Z',note:'September work'};
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',change)).status,200);
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',change)).status,200);
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',{...change,id:crypto.randomUUID()})).status,409);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM work_entry_changes').get().n,1);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,8);
+  const stripe=invoiceStripe(),draft={id:crypto.randomUUID(),period:'2025-09',email:contact.email,credits:8};
+  await f.call(staff,`/clients/${clientId}/invoices`,'POST',draft);await issueInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  const locked={...change,id:crypto.randomUUID(),expectedVersion:1,occurredAt:'2025-08-01T00:00:00Z'};
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',locked)).status,409);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM work_entry_changes').get().n,1);
+  assert.equal((await f.call(staff,path,'POST',datedEntry(4,'2025-09'))).status,409);
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',{...locked,credits:12})).status,400);
+  assert.equal((await f.call(staff,path,'POST',entry)).status,409); // Original payload differs after correction.
+  await voidInvoice(testStripeEnv,f.DB,clientId,draft.id,stripe);
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',locked)).status,200);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,-8);
+  const next={...draft,id:crypto.randomUUID(),period:'2025-08'};await f.call(staff,`/clients/${clientId}/invoices`,'POST',next);await issueInvoice(testStripeEnv,f.DB,clientId,next.id,stripe);
+  const invoice=stripe.records.get(f.sqlite.prepare('SELECT stripe_invoice_id FROM invoices WHERE id=?').get(next.id).stripe_invoice_id);invoice.status='paid';invoice.amount_paid=60000;invoice.amount_remaining=0;
+  await refreshInvoice(testStripeEnv,f.DB,clientId,next.id,stripe);
+  assert.equal((await f.call(staff,`${path}/${entry.id}`,'PATCH',{...change,id:crypto.randomUUID(),expectedVersion:2})).status,409);
+});
+test('legacy charges cannot be charged again as entries, nor reallocated through an issued invoice',async()=>{
+  const f=await overdueFixture(),path=`/clients/${f.clientId}/tasks/${f.task.id}/work-entries`;
+  assert.equal((await f.call(staff,path,'POST',datedEntry(4,'2025-01'))).status,409);
+  const stripe=invoiceStripe();await f.call(staff,`/clients/${f.clientId}/invoices`,'POST',f.draft);await issueInvoice(testStripeEnv,f.DB,f.clientId,f.draft.id,stripe);
+  const allocation={id:crypto.randomUUID(),expectedCredits:24,entries:[datedEntry(24,'2025-02')]};
+  assert.equal((await f.call(staff,`${path}/reallocate`,'POST',allocation)).status,409);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM work_entries').get().n,0);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM work_reallocations').get().n,0);
+});
+test('purchased credits cover oldest dated work; cancelling an entry project refunds its total only once',async()=>{
+  const f=fixture(),clientId=await f.client(),task=f.work(0);await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const path=`/clients/${clientId}/tasks/${task.id}/work-entries`;
+  for(const entry of [datedEntry(20,'2025-09'),datedEntry(12,'2025-08')])await f.call(staff,path,'POST',entry);
+  await f.fund(clientId,'pi_prepaidMonthly',16);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,16);
+  const cancellation={id:crypto.randomUUID(),status:'cancelled',note:'Cancelled agreed work.'};
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',cancellation);await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',cancellation);
+  assert.equal((await f.call(contact,`/clients/${clientId}`)).data.balance,16);
+  assert.equal(f.sqlite.prepare("SELECT count(*) AS n FROM ledger WHERE kind='refund'").get().n,1);
+  assert.equal((await f.call(staff,path,'POST',datedEntry(4))).status,409);
+});
 
 async function agentKey(f,scopes=['admin'],expiresAt=null) {
   const keyId=randomBytes(16).toString('hex'),token=`wwa_${keyId}_${randomBytes(32).toString('base64url')}`;
@@ -277,8 +413,8 @@ test('historical projects use work dates for monthly billing and ledger display 
   assert.equal((await f.call(key.actor,path,'POST',january)).data.balance,-12);
   assert.equal((await billingPreview(f.DB,clientId,'2024-12')).credits,0);
   assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,8);
-  assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,8);
-  assert.equal((await billingPreview(f.DB,clientId,'2025-03')).credits,12);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-03')).credits,4);
   const detail=(await f.call(contact,`/clients/${clientId}`)).data;
   assert.equal(detail.tasks.find(task=>task.id===january.id).occurred_at,'2025-01-15T18:00:00.000Z');
   assert.equal(detail.workDateHistory,undefined);assert.equal(detail.ledger.length,2);
@@ -583,7 +719,7 @@ test('revoking an email removes access immediately while work and credits remain
 
 test('invalid work quantities and duplicate IDs do not create charges',async()=>{
   const f=fixture(), id=await f.client(); await f.fund(id);
-  for (const credits of [-1,0,1.5,10001,'4']) assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',f.work(credits))).status,400);
+  for (const credits of [-1,1.5,10001,'4']) assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',f.work(credits))).status,400);
   const task=f.work(); await f.call(staff,`/clients/${id}/tasks`,'POST',task);
   assert.equal((await f.call(staff,`/clients/${id}/tasks`,'POST',{...task,credits:8})).status,409);
   assert.equal((await f.call(staff,`/clients/${id}`)).data.balance,12);

@@ -63,13 +63,17 @@ Paths below are relative to the base URL. `client`, `project`, `update`,
 | --- | --- |
 | `GET /me` | Identity, staff flag, key ID, scopes and payment configuration |
 | `GET /clients` | `{clients: [...]}` with balances and active project counts |
-| `GET /clients/{client}` | Account, members, tasks, updates, ledger, attachments, invoices, and staff-only `sourceReferences` / `workDateHistory` |
+| `GET /clients/{client}` | Account, members, tasks, updates, ledger, attachments, invoices, workEntries, and staff-only `sourceReferences` / `workDateHistory` |
 | `POST /clients` | `{id, name, email}`; creates account with its first approved client email |
 | `POST /clients/{client}/members` | `{email}`; approves client access |
 | `DELETE /clients/{client}/members` | `{email}`; revokes client access |
 | `POST /clients/{client}/tasks` | New project; fields below |
 | `PATCH /clients/{client}/tasks/{project}/details` | `{id,title,description,requestedBy,source,expectedVersion}`; edit project details |
-| `PATCH /clients/{client}/tasks/{project}/date` | `{id,occurredAt,expectedVersion,emailMessageId?}`; correct the project's work/billing date |
+| `PATCH /clients/{client}/tasks/{project}/date` | Legacy project date correction before conversion to entries |
+| `GET /clients/{client}/tasks/{project}/work-entries` | Dated work entries; source references visible only to staff |
+| `POST /clients/{client}/tasks/{project}/work-entries` | `{id,occurredAt,hours,credits,note,source?}`; debit once |
+| `POST /clients/{client}/tasks/{project}/work-entries/reallocate` | `{id,expectedCredits,entries}`; split an existing charge without changing balance |
+| `PATCH /clients/{client}/tasks/{project}/work-entries/{entry}` | `{id,expectedVersion,occurredAt?,note?}`; audited unbilled correction |
 | `POST /clients/{client}/tasks/{project}/updates` | Progress note; fields below |
 | `PATCH /clients/{client}/tasks/{project}/updates/{update}` | `{occurredAt}`; correct an existing update's event date |
 | `DELETE /clients/{client}/tasks/{project}/updates/{update}` | Hide an update from clients; records/files are retained |
@@ -97,75 +101,112 @@ automatically from Stripe. Never use this endpoint to invent funds or infer a
 payment from an email. `POST /clients/{client}/checkout` takes `{sessionId}` and
 verifies an actual paid Stripe Checkout session before awarding credits.
 
-## Create a project
+## Create a project and record dated work
+
+Create project metadata with `POST /clients/{client}/tasks`:
 
 ```json
 {
-  "id": "a freshly generated UUID saved before the request",
+  "id": "a project UUID saved before the request",
   "title": "Onboarding design",
   "description": "Design the new onboarding screens for client review.",
   "requestedBy": "client@example.com",
   "source": "email",
-  "credits": 8,
-  "status": "in_progress",
-  "occurredAt": "2026-08-31T15:22:00-07:00",
-  "emailMessageId": "the mailbox's stable source message ID"
+  "status": "in_progress"
 }
 ```
 
-Send to `POST /clients/{client}/tasks`. `source` is `email`, `text`, `call`,
-`meeting`, or `other`. Initial status is `queued`, `in_progress`, or `completed`.
-Credits must be a whole positive amount (maximum 10,000). At normal delivery,
-one hour is four credits; use the actual agreed charge. Project creation deducts
-credits immediately, even when queued, and can take the balance negative.
-Replaying the same project UUID and original terms does not deduct again.
-Cancellation refunds once; progress updates never deduct additional credits.
-The server supplies actor identity; posted `created_by` or `actor_email` cannot
-impersonate someone else.
+Omit `credits` (or send zero). Creation does not debit the balance. `source` is
+`email`, `text`, `call`, `meeting`, or `other`; initial status is `queued`,
+`in_progress`, or `completed`. Retry creation using the same UUID and terms.
+Actor identity always comes from the authenticated staff account.
 
-`occurredAt` is optional and identifies **when the work happened**, not when it
-was entered. Use the email evidence for that event and an ISO 8601 timestamp with
-its timezone. Work dates must be from 2020 onward and not in the future. If
-omitted, the recording time is used, preserving existing behavior. The task's
-`occurred_at`, the work ledger entry's `occurred_at`, and the project timeline
-show this event date. Their `created_at` values remain server audit timestamps.
-`emailMessageId` is optional and retained privately in staff `workDateHistory`;
-do not put raw private email threads in the client-visible brief.
-
-**Monthly billing now uses the project's work date.** Reviews are cumulative
-through the selected completed UTC month. Purchased credits and already issued
-invoices cover the oldest active work first; `credits` is remaining unbilled
-debt, not gross hours or all credits spent. A fully prepaid project therefore
-does not produce an additional invoice. Cancelling removes that project's own
-charge. Top-ups do not revive previously covered old debt.
-
-For projects already imported, **correct the existing record instead of creating
-another project**:
+Post each separate date's work to
+`POST /clients/{client}/tasks/{project}/work-entries`:
 
 ```json
 {
-  "id": "a new UUID saved for this correction and reused on retry",
-  "occurredAt": "2026-08-31T15:22:00-07:00",
-  "expectedVersion": 0,
-  "emailMessageId": "the source email's stable message ID"
+  "id": "a saved work-entry UUID",
+  "occurredAt": "2026-08-31T00:00:00Z",
+  "hours": 5,
+  "credits": 20,
+  "note": "Design updates for the client review.",
+  "source": {"type": "email", "id": "stable-message-id"}
 }
 ```
 
-Send this to `PATCH /clients/{client}/tasks/{project}/date`. Read
-`expectedVersion` from the current task's `details_version` (the example's zero
-is not a value to guess). A correction changes month attribution without
-deducting credits again, recreating projects, or changing IDs, descriptions,
-progress, files or status. It preserves an audit of the previous date, new date,
-source email and actor. Both date and detail edits increment `details_version`;
-stale corrections return 409. James's admin key includes this operation;
-restricted keys need `billing:dates`.
+An entry debits credits exactly once and increases the project's credit total.
+Use actual email evidence for `occurredAt`; ISO timestamps require a timezone
+and are normalized to UTC. Work must be from 2020 onward and not in the future.
+Hours are positive quarter-hour increments; credits must equal hours × 4 and be
+whole credits (maximum 10,000 per entry). Notes are client-visible. Source
+references are private to staff; never put private email threads in notes.
+`source` is optional for manually logged work without an external reference.
 
-Issued, preparing, and paid invoices lock work dates covered by their cutoff.
-Corrections that reassign those dates return 409. An unpaid invoice can be
-resolved through the existing void/review workflow; paid invoices cannot be
-voided here. Drafts must match the current reviewed debt exactly at issuance.
-If historical work or a date correction changes a draft's amount, cancel it and
-review again. The API does not rewrite Stripe invoices or charge a correction.
+Retries deduplicate by entry UUID and by `(project, source.type, source.id)`.
+The terms must match or the API returns 409. A source retry may use a new UUID;
+the original entry is returned, without a second debit. Use one entry for each
+source message within a project; if one email contains multiple dated line items,
+use a stable documented line-item identifier as part of its source ID. UUIDs are
+globally unique across projects. Restricted keys need `billing:work` to log work
+and `clients:read` to list entries with `GET .../work-entries`.
+
+## Reallocate existing project charges
+
+Do not recreate already charged projects. Use the staff-only endpoint
+`POST /clients/{client}/tasks/{project}/work-entries/reallocate`:
+
+```json
+{
+  "id": "a reallocation UUID saved before sending",
+  "expectedCredits": 87,
+  "entries": [
+    {"id": "first entry UUID", "occurredAt": "2026-08-31T00:00:00Z", "hours": 20.25, "credits": 81, "note": "August Career Tab work", "source": {"type": "email", "id": "august-source-id"}},
+    {"id": "second entry UUID", "occurredAt": "2026-09-30T00:00:00Z", "hours": 1.5, "credits": 6, "note": "September Career Tab work", "source": {"type": "email", "id": "september-source-id"}}
+  ]
+}
+```
+
+Allocate the **entire existing charge** in one request (1–100 entries). The sum
+must exactly equal `expectedCredits` and the project's original charged credits;
+over- and under-allocation are rejected. The operation is atomic and idempotent
+by reallocation UUID; retry its identical payload. Balance, original ledger rows,
+project IDs, files, progress and status do not change. After conversion, billing
+counts only dated entries, never the original debit again. New additional work
+can then be logged using the usual work-entry POST.
+
+For backward compatibility, a positive `credits` value on project creation still
+uses the old upfront-charge workflow. Do not use it for new API imports; such a
+project must first be fully reallocated before it accepts new debiting entries.
+Legacy project-date PATCH remains available only before conversion.
+
+## Billing and corrections
+
+`GET /clients/{client}/billing?period=YYYY-MM` now reviews **only that completed
+UTC month**, rather than cumulative work through its end. Work in September does
+not include unbilled August work. Purchased credits cover the oldest work first;
+reviews show remaining unbilled debt at $75 per credit, not prepaid work already
+covered by purchases or issued invoices. Issued monthly invoices cover their own
+month. Existing invoices retain their original legacy attribution. Draft, issue,
+payment and void workflows remain unchanged, with an exact fresh amount check
+before issuance. Existing invoices are never rewritten automatically.
+
+Staff can correct an unbilled entry with
+`PATCH /clients/{client}/tasks/{project}/work-entries/{entry}`:
+
+```json
+{"id": "a new saved correction UUID", "expectedVersion": 0, "occurredAt": "2026-09-01T00:00:00Z", "note": "Corrected client-visible summary"}
+```
+
+Read `expectedVersion` from the entry's `version`; send `occurredAt`, `note`, or
+both. This retains an audit of before/after values and the actor and never changes
+the charge. Entry hours, credits, source and identity are immutable. Stale edits
+return 409. Reallocation and corrections require `billing:dates` (included in
+James's existing admin key). Preparing, open and paid invoices lock entries in
+the affected billing month, including moving an entry into that month. New entries
+into an already issued month are also blocked. Resolve unpaid invoices through
+the existing void/review workflow; paid invoices remain locked. Amount corrections
+need a separately audited financial adjustment, not an edit to a billed charge.
 
 Staff can edit the title, brief, requester and source with the details PATCH
 route. Send a new edit UUID and the current project's `details_version` as
@@ -311,5 +352,5 @@ request and needs reconciliation against the project/invoice records.
 
 For a restricted integration, supported scopes are `clients:read`,
 `projects:create`, `projects:update`, `projects:moderate`, `projects:cancel`, `attachments:write`,
-`billing:read`, `billing:dates`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
+`billing:read`, `billing:work`, `billing:dates`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
 requires both update and cancel; `admin` includes every existing staff API route.

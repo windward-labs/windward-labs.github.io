@@ -7,24 +7,29 @@ export const invoicedCreditsSql=`COALESCE((SELECT SUM(i.credits) FROM invoices i
 // Purchased credits and invoice transfers cover the oldest active work first.
 // Cancellations remove their own charge; they must not pay unrelated old debt.
 // Work dates, rather than ingestion order, determine month attribution.
-export const ledgerEventDate=`CASE WHEN l.kind='work' THEN COALESCE((SELECT t.occurred_at FROM tasks t WHERE t.id=l.task_id),l.created_at) ELSE l.created_at END`;
-const dueSql=`MAX(0,MIN(-c.balance,
-  COALESCE((SELECT SUM(t.credits) FROM tasks t WHERE t.client_id=c.id AND t.status!='cancelled' AND COALESCE(t.occurred_at,t.created_at)<?),0)
+export const ledgerEventDate=`CASE WHEN l.kind='work' THEN COALESCE((SELECT e.occurred_at FROM work_entries e WHERE 'work-entry:'||e.id=l.id),(SELECT t.occurred_at FROM tasks t WHERE t.id=l.task_id),l.created_at) ELSE l.created_at END`;
+const cumulative=date=>`MAX(0,MIN(-c.balance,
+  COALESCE((SELECT SUM(w.credits) FROM billable_work w WHERE w.client_id=c.id AND w.occurred_at<${date}),0)
   -COALESCE((SELECT SUM(l.credits) FROM ledger l WHERE l.client_id=c.id AND l.kind='purchase'),0)
-  -COALESCE((SELECT SUM(i.credits) FROM invoices i WHERE i.client_id=c.id AND i.status IN ('issuing','open','paid')),0)))`;
+  -COALESCE((SELECT SUM(i.credits) FROM invoices i WHERE i.client_id=c.id AND i.status IN ('issuing','open','paid') AND (i.attribution_mode='legacy' OR i.cutoff<=${date})),0)))`;
+// Difference of cumulative uncovered credits makes each review month-specific.
+// Purchases still cover the oldest work first; issued bills are not billed again.
+const dueSql=`MAX(0,${cumulative('review.cutoff')}-${cumulative('review.start')})`;
+const reviewBounds=period=>[billingPeriod(period),`${period}-01T00:00:00.000Z`];
 export function billingPeriod(period,now=new Date()) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period || '') || period<'2020-01' || period>=now.toISOString().slice(0,7)) throw new PortalError(400,'Choose a completed billing month.');
   const [year,month]=period.split('-').map(Number);
   return new Date(Date.UTC(year,month,1)).toISOString();
 }
 export async function billingPreview(db,clientId,period) {
-  const cutoff=billingPeriod(period);
-  const row=await query(db,`SELECT ${dueSql} AS credits FROM clients c WHERE c.id=?`,cutoff,clientId).first();
+  const [cutoff,start]=reviewBounds(period);
+  const row=await query(db,`SELECT ${dueSql} AS credits FROM clients c CROSS JOIN (SELECT ? AS cutoff,? AS start) review WHERE c.id=?`,cutoff,start,clientId).first();
+  if(!row)throw new PortalError(404,'Client not found.');
   return {period,cutoff,credits:row.credits,amountCents:row.credits*creditPriceCents};
 }
 export async function createInvoiceDraft(env,db,actor,clientId,body) {
   stripeClient(env); // Fail before reserving a draft if payments aren't configured.
-  const invoiceId=id(body.id), email=normalizeEmail(body.email), cutoff=billingPeriod(body.period);
+  const invoiceId=id(body.id), email=normalizeEmail(body.email), [cutoff,start]=reviewBounds(body.period);
   if (!Number.isSafeInteger(body.credits) || body.credits<=0) throw new PortalError(400,'There are no outstanding credits to invoice.');
   const existing=await query(db,'SELECT * FROM invoices WHERE id=?',invoiceId).first();
   if (existing) {
@@ -32,9 +37,9 @@ export async function createInvoiceDraft(env,db,actor,clientId,body) {
     return;
   }
   // The expected amount protects a staff review from concurrent top-ups/refunds.
-  await query(db,`INSERT INTO invoices (id,client_id,period,cutoff,email,credits,amount_cents,stripe_mode,created_by,actor_email)
-    SELECT ?,c.id,?,?,?,?,?,?,?,? FROM clients c WHERE c.id=? AND ${dueSql}=?`,
-    invoiceId,body.period,cutoff,email,body.credits,body.credits*creditPriceCents,env.STRIPE_MODE,actor.id,actor.email,clientId,cutoff,body.credits).run();
+  await query(db,`INSERT INTO invoices (id,client_id,period,cutoff,email,credits,amount_cents,stripe_mode,created_by,actor_email,attribution_mode)
+    SELECT ?,c.id,?,?,?,?,?,?,?,?,'monthly' FROM clients c CROSS JOIN (SELECT ? AS cutoff,? AS start) review WHERE c.id=? AND ${dueSql}=?`,
+    invoiceId,body.period,cutoff,email,body.credits,body.credits*creditPriceCents,env.STRIPE_MODE,actor.id,actor.email,cutoff,start,clientId,body.credits).run();
   if (!await query(db,'SELECT id FROM invoices WHERE id=?',invoiceId).first()) throw new PortalError(409,'The balance changed. Refresh the billing review before creating a draft.');
 }
 async function invoiceRecord(db,clientId,invoiceId) {
@@ -64,7 +69,7 @@ export async function issueInvoice(env,db,clientId,invoiceId,stripe=stripeClient
   if (record.status==='paid' || record.status==='void' || record.status==='open') return;
   if (record.status==='draft') {
     await query(db,`UPDATE invoices SET status='issuing' WHERE id=? AND status='draft' AND credits=
-      (SELECT ${dueSql} FROM clients c WHERE c.id=invoices.client_id)`,record.id,record.cutoff).run();
+      (SELECT ${record.attribution_mode==='legacy' ? cumulative('review.cutoff') : dueSql} FROM clients c CROSS JOIN (SELECT ? AS cutoff,? AS start) review WHERE c.id=invoices.client_id)`,record.id,record.cutoff,`${record.period}-01T00:00:00.000Z`).run();
     record=await invoiceRecord(db,clientId,invoiceId);
     if (record.status==='draft') throw new PortalError(409,'The outstanding credits changed. Cancel this draft and review the updated balance.');
   }
@@ -79,7 +84,7 @@ export async function issueInvoice(env,db,clientId,invoiceId,stripe=stripeClient
     const previous=await stripe.invoices.list({customer:record.stripe_customer_id,limit:100});
     let invoice=previous.data.find(invoice=>invoice.metadata?.windward_invoice_id===record.id);
     if (!invoice) invoice=await stripe.invoices.create({customer:record.stripe_customer_id,currency:'usd',collection_method:'send_invoice',days_until_due:30,auto_advance:false,pending_invoice_items_behavior:'exclude',discounts:'',
-      description:`Windward outstanding credits through ${record.period}`,
+      description:`Windward outstanding credits for ${record.period}`,
       metadata:{windward_invoice_id:record.id,client_id:clientId,credits:String(record.credits),period:record.period}},
       {idempotencyKey:`windward-invoice:${record.id}`});
     await query(db,'UPDATE invoices SET stripe_invoice_id=? WHERE id=? AND stripe_invoice_id IS NULL',invoice.id,record.id).run();
@@ -88,7 +93,7 @@ export async function issueInvoice(env,db,clientId,invoiceId,stripe=stripeClient
   let invoice=await stripe.invoices.retrieve(record.stripe_invoice_id);
   if (invoice.status==='draft') {
     if (invoice.lines.data.length===0) {
-      await stripe.invoiceItems.create({customer:record.stripe_customer_id,invoice:record.stripe_invoice_id,currency:'usd',amount:record.amount_cents,description:`${record.credits} outstanding credits × $75 · through ${record.period}`},{idempotencyKey:`windward-invoice-item:${record.id}`});
+      await stripe.invoiceItems.create({customer:record.stripe_customer_id,invoice:record.stripe_invoice_id,currency:'usd',amount:record.amount_cents,description:`${record.credits} outstanding credits × $75 · ${record.period}`},{idempotencyKey:`windward-invoice-item:${record.id}`});
       invoice=await stripe.invoices.retrieve(record.stripe_invoice_id);
     }
     verifyInvoice(env,record,invoice);
