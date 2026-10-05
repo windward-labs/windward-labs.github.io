@@ -22,7 +22,11 @@ export function workInput(body) {
   if (!Number.isSafeInteger(credits) || credits <= 0 || credits > 10000) throw new PortalError(400, 'Use a whole credit amount between 1 and 10,000.');
   if (!['email','text','call','meeting','other'].includes(body.source)) throw new PortalError(400, 'Choose a source channel.');
   if (!['queued','in_progress','completed'].includes(body.status)) throw new PortalError(400, 'Choose a work status.');
-  return { id: id(body.id), title: text(body.title,'Title',160), description: text(body.description,'Work description'), requestedBy: text(body.requestedBy,'Requested by',254), source: body.source, credits, status: body.status };
+  if(['billingDate','startedAt','billingPeriod','createdAt','date'].some(key=>body[key]!==undefined))throw new PortalError(400,'Use occurredAt for the work date.');
+  const occurredAt=body.occurredAt===undefined ? null : workTimestamp(body.occurredAt);
+  const emailMessageId=body.emailMessageId===undefined ? null : text(body.emailMessageId,'Email message ID',500);
+  if(emailMessageId && !occurredAt)throw new PortalError(400,'Send occurredAt with the email message ID.');
+  return { id: id(body.id), title: text(body.title,'Title',160), description: text(body.description,'Work description'), requestedBy: text(body.requestedBy,'Requested by',254), source: body.source, credits, status: body.status,occurredAt,emailMessageId };
 }
 export function statusInput(body) {
   if (!['queued','in_progress','completed','cancelled'].includes(body.status)) throw new PortalError(400, 'Choose a valid status.');
@@ -34,6 +38,11 @@ export function eventTimestamp(value) {
   const milliseconds=Date.parse(value);
   if(year<1000 || month<1 || month>12 || day<1 || day>new Date(Date.UTC(year,month,0)).getUTCDate() || hour>23 || minute>59 || second>59 || !Number.isFinite(milliseconds))throw new PortalError(400,'Use a valid occurredAt timestamp.');
   return new Date(milliseconds).toISOString();
+}
+export function workTimestamp(value) {
+  const timestamp=eventTimestamp(value);
+  if(timestamp<'2020-01-01T00:00:00.000Z' || Date.parse(timestamp)>Date.now())throw new PortalError(400,'Work dates must be from 2020 onward and cannot be in the future.');
+  return timestamp;
 }
 export function isStaffEmail(email) {
   // Called with a server-verified Privy email or a provisioned agent identity.

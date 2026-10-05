@@ -217,6 +217,10 @@
 .portal-timeline li { position: relative; display: grid; gap: 8px; padding-bottom: 24px; }
 .portal-timeline li:last-child { padding-bottom: 0; }
 .portal-timeline li::before { content: ''; position: absolute; width: 9px; height: 9px; left: -29px; top: 7px; border-radius: 50%; background: #737373; border: 2px solid #fff; }
+.workspace .portal-update-action { border: 0; padding: 0; background: transparent; color: #737373; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+.portal-update-action:disabled { opacity: .5; cursor: wait; }
+.portal-timeline li.portal-timeline-hidden { padding: 12px; margin-bottom: 16px; background: #f5f5f5; border-radius: 4px; }
+.portal-timeline li.portal-timeline-hidden::before { top: 19px; }
 
 .portal-payment-document { margin-top: 8px; }
 .workspace .portal-download-link { border: 0; padding: 0; background: transparent; text-decoration: underline; text-underline-offset: 4px; color: #171717; }

@@ -1,9 +1,9 @@
-import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput,eventTimestamp } from './domain.mjs';
+import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput,eventTimestamp,workTimestamp } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
 import {authorizeAgent,requireAgentScope} from './agent-auth.mjs';
 import { paymentDocument } from './payment-documents.mjs';
 import { handleAttachment } from './attachments.mjs';
-import { invoicedCreditsSql, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
+import { invoicedCreditsSql, ledgerEventDate, billingPreview, createInvoiceDraft, issueInvoice, refreshInvoice, voidInvoice } from './billing.mjs';
 
 const json = (data, status = 200) => new Response(JSON.stringify(data), { status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
 const query = (db, sql, ...values) => db.prepare(sql).bind(...values);
@@ -23,17 +23,18 @@ async function clientAccess(db, actor, clientId) {
 async function detail(db, actor, clientId) {
   // Read authorization and data in a single primary database session.
   const client = await clientAccess(db,actor,clientId);
-  const [members,tasks,updates,ledger,attachments,invoices,balances,sources] = await db.batch([
+  const [members,tasks,updates,ledger,attachments,invoices,balances,sources,workDates] = await db.batch([
     query(db,'SELECT email FROM client_members WHERE client_id = ? ORDER BY email',clientId),
     query(db,'SELECT * FROM tasks WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
-    query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? ORDER BY COALESCE(u.occurred_at,u.created_at) DESC, u.created_at DESC, u.id',clientId),
-    query(db,'SELECT * FROM ledger WHERE client_id = ? ORDER BY created_at DESC, id',clientId),
-    query(db,'SELECT a.id,a.task_id,a.update_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id WHERE t.client_id=? AND a.ready=1 ORDER BY a.created_at,a.id',clientId),
+    query(db,'SELECT u.* FROM task_updates u JOIN tasks t ON t.id = u.task_id WHERE t.client_id = ? AND (u.hidden_at IS NULL OR ?=1) ORDER BY COALESCE(u.occurred_at,u.created_at) DESC, u.created_at DESC, u.id',clientId,actor.staff ? 1 : 0),
+    query(db,`SELECT l.*,${ledgerEventDate} AS occurred_at FROM ledger l WHERE l.client_id=? ORDER BY occurred_at DESC,l.rowid DESC`,clientId),
+    query(db,'SELECT a.id,a.task_id,a.update_id,a.name,a.size,a.created_at FROM attachments a JOIN tasks t ON t.id=a.task_id LEFT JOIN task_updates u ON u.id=a.update_id WHERE t.client_id=? AND a.ready=1 AND (?=1 OR a.update_id IS NULL OR (u.id IS NOT NULL AND u.hidden_at IS NULL)) ORDER BY a.created_at,a.id',clientId,actor.staff ? 1 : 0),
     query(db,`SELECT id,period,email,credits,amount_cents,status,hosted_invoice_url,number,created_at FROM invoices WHERE client_id=? ${actor.staff ? '' : 'AND stripe_invoice_id IS NOT NULL'} ORDER BY created_at DESC,id`,clientId),
     query(db,`SELECT c.balance,${invoicedCreditsSql} AS invoiced_credits FROM clients c WHERE c.id=?`,clientId),
     query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
+    query(db,'SELECT d.* FROM project_date_changes d JOIN tasks t ON t.id=d.task_id WHERE t.client_id=? AND ?=1 ORDER BY d.created_at,d.id',clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,...(actor.staff ? {sourceReferences:sources.results} : {}) };
+  return { ...client,...balances.results[0], members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
 }
 
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
@@ -116,6 +117,30 @@ async function handleAuthorizedApi(request, env, authenticate) {
       ]);
       return json(await detail(db,actor,clientId),201);
     }
+    const workDateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/date$/);
+    if(workDateRoute) {
+      if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
+      requireStaff(actor);
+      requireAgentScope(actor,'billing:dates');
+      const clientId=id(workDateRoute[1]),taskId=id(workDateRoute[2]);await clientAccess(db,actor,clientId);
+      const task=await query(db,'SELECT * FROM tasks WHERE id=? AND client_id=?',taskId,clientId).first();
+      if(!task)throw new PortalError(404,'Project not found.');
+      const body=await bodyOf(request),changeId=id(body.id),occurredAt=workTimestamp(body.occurredAt);
+      if(Object.keys(body).some(key=>!['id','occurredAt','expectedVersion','emailMessageId'].includes(key)))throw new PortalError(400,'This endpoint only changes the project work date.');
+      if(!Number.isSafeInteger(body.expectedVersion) || body.expectedVersion<0)throw new PortalError(400,'Send the project details_version as expectedVersion.');
+      const messageId=body.emailMessageId===undefined ? null : text(body.emailMessageId,'Email message ID',500);
+      const existing=await query(db,'SELECT * FROM project_date_changes WHERE id=?',changeId).first();
+      if(existing) {
+        if(existing.task_id!==taskId || existing.occurred_at!==occurredAt || existing.source_message_id!==messageId)throw new PortalError(409,'Work-date change ID already used.');
+      } else {
+        await db.batch([
+          query(db,`INSERT INTO project_date_changes (id,task_id,previous_date,occurred_at,source_message_id,created_by,actor_email) SELECT ?,id,COALESCE(occurred_at,created_at),?,?,?,? FROM tasks WHERE id=? AND client_id=? AND details_version=?`,changeId,occurredAt,messageId,actor.id,actor.email,taskId,clientId,body.expectedVersion),
+          query(db,`UPDATE tasks SET occurred_at=?,details_version=details_version+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),updated_by=?,updated_actor_email=? WHERE id=? AND client_id=? AND details_version=?`,occurredAt,actor.id,actor.email,taskId,clientId,body.expectedVersion),
+        ]);
+        if(!await query(db,'SELECT 1 FROM project_date_changes WHERE id=?',changeId).first())throw new PortalError(409,'Project changed. Reload before correcting its work date.');
+      }
+      return json(await detail(db,actor,clientId));
+    }
     const editRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/details$/);
     if(editRoute) {
       if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
@@ -142,13 +167,22 @@ async function handleAuthorizedApi(request, env, authenticate) {
       }
       return json(await detail(db,actor,clientId));
     }
-    const dateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates\/([^/]+)$/);
+    const dateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates\/([^/]+)(?:\/(restore))?$/);
     if(dateRoute) {
-      if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
+      if(dateRoute[4] ? method!=='POST' : !['PATCH','DELETE'].includes(method))throw new PortalError(405,'Method not allowed.');
       requireStaff(actor);
       const clientId=id(dateRoute[1]),taskId=id(dateRoute[2]),updateId=id(dateRoute[3]);
       await clientAccess(db,actor,clientId);
       if(!await query(db,'SELECT 1 FROM task_updates u JOIN tasks t ON t.id=u.task_id WHERE u.id=? AND t.id=? AND t.client_id=?',updateId,taskId,clientId).first())throw new PortalError(404,'Progress update not found.');
+      if(method==='DELETE' || dateRoute[4]) {
+        const hide=method==='DELETE',condition=hide ? 'hidden_at IS NULL' : 'hidden_at IS NOT NULL';
+        await db.batch([
+          query(db,`INSERT INTO update_visibility_changes (id,update_id,action,created_by,actor_email) SELECT ?,id,?,?,? FROM task_updates WHERE id=? AND ${condition}`,crypto.randomUUID(),hide ? 'hide' : 'restore',actor.id,actor.email,updateId),
+          hide ? query(db,`UPDATE task_updates SET hidden_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),hidden_by=?,hidden_actor_email=? WHERE id=? AND ${condition}`,actor.id,actor.email,updateId)
+            : query(db,`UPDATE task_updates SET hidden_at=NULL,hidden_by=NULL,hidden_actor_email=NULL WHERE id=? AND ${condition}`,updateId),
+        ]);
+        return json(await detail(db,actor,clientId));
+      }
       const body=await bodyOf(request);
       if(Object.keys(body).some(key=>key!=='occurredAt'))throw new PortalError(400,'This endpoint only changes occurredAt.');
       const occurredAt=eventTimestamp(body.occurredAt);
@@ -231,14 +265,20 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const work = workInput(body);
       const existing = await query(db,'SELECT * FROM tasks WHERE id=?',work.id).first();
       if (existing) {
-        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy) throw new PortalError(409,'Work record ID already used.');
-      } else await query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email) VALUES (?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email).run();
+        if (existing.client_id !== clientId || existing.title !== work.title || existing.description !== work.description || existing.credits !== work.credits || existing.source !== work.source || existing.requested_by !== work.requestedBy || (work.occurredAt && (existing.occurred_at ?? existing.created_at)!==work.occurredAt)) throw new PortalError(409,'Work record ID already used.');
+        if(work.emailMessageId && (await query(db,'SELECT source_message_id FROM project_date_changes WHERE id=?',work.id).first())?.source_message_id!==work.emailMessageId)throw new PortalError(409,'Work record source already used.');
+      } else {
+        const statements=[query(db,`INSERT INTO tasks (id,client_id,title,description,requested_by,source,credits,status,created_by,actor_email,occurred_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,work.id,clientId,work.title,work.description,work.requestedBy,work.source,work.credits,work.status,actor.id,actor.email,work.occurredAt)];
+        if(work.occurredAt)statements.push(query(db,`INSERT INTO project_date_changes (id,task_id,previous_date,occurred_at,source_message_id,created_by,actor_email) SELECT ?,id,created_at,occurred_at,?,?,? FROM tasks WHERE id=?`,work.id,work.emailMessageId,actor.id,actor.email,work.id));
+        await db.batch(statements);
+      }
     } else if (resource === 'tasks' && method === 'PATCH' && taskId) {
       await addProjectUpdate(db,actor,clientId,id(taskId),body);
     } else throw new PortalError(405,'Method not allowed.');
     return json(await detail(db,actor,clientId));
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
+    if (/Work date is covered by an issued invoice/i.test(String(error))) return json({error:'An issued invoice covers this work date. Resolve that invoice before changing its billing attribution.'},409);
     if (/UNIQUE constraint failed: invoices.client_id, invoices.period/i.test(String(error))) return json({error:'This month already has an invoice. Open the existing bill before creating another.'},409);
     if (/UNIQUE constraint/i.test(String(error))) return json({error:'This record or payment reference already exists. Refresh before trying again.'},409);
     console.error('Portal request failed',error instanceof Error ? error.name : 'Unknown error');

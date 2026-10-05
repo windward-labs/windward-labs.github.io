@@ -159,12 +159,25 @@ invoice ID, and test/live environment. Returning to the portal tab refreshes
 open invoice statuses as well.
 
 A unique active invoice per client/month prevents duplicate billing. Billing
-uses the highest running credit balance since the selected month ended, so
-later work cannot revive old debt cleared by a top-up. The approval step rejects
-a draft whose credits have already been covered. If Stripe fails, the bill stays
+uses the date the work occurred, with purchased credits and issued invoices
+covering the oldest active work first. Later work cannot revive old debt cleared
+by a top-up, and cancellation removes its own charge. The approval step rejects
+a draft that no longer matches the reviewed outstanding credits. If Stripe fails, the bill stays
 in **Preparing invoice**; **Retry issuing invoice** resumes its stored Stripe IDs
 and idempotency keys without moving credits twice. Voiding an unpaid bill returns
 its credits to the unbilled balance; paid invoices cannot be voided here.
+
+Project creation accepts `occurredAt` and an optional private `emailMessageId`.
+Existing projects can be corrected through the work-date PATCH endpoint or
+**Change work date** on the project page. Corrections retain the original server
+timestamps and debit, change monthly attribution without a second charge, and
+are locked when an issued invoice covers the affected date. Billing months use
+UTC. See the agent guide for exact request bodies and retry/version semantics.
+
+Staff can hide duplicate/test progress updates and restore them from **Show
+hidden updates**. Clients cannot read hidden updates or their attachments; notes,
+file objects and visibility audits remain available to staff. Hiding has no
+effect on status, refunds, credit balances or billing.
 
 Invoices currently use a fixed USD total at $75/credit without automatic Stripe
 Tax; review billing details before issuing. Existing Payment Link purchases keep

@@ -63,14 +63,17 @@ Paths below are relative to the base URL. `client`, `project`, `update`,
 | --- | --- |
 | `GET /me` | Identity, staff flag, key ID, scopes and payment configuration |
 | `GET /clients` | `{clients: [...]}` with balances and active project counts |
-| `GET /clients/{client}` | Account, members, tasks, updates, ledger, attachments, invoices, and staff-only `sourceReferences` |
+| `GET /clients/{client}` | Account, members, tasks, updates, ledger, attachments, invoices, and staff-only `sourceReferences` / `workDateHistory` |
 | `POST /clients` | `{id, name, email}`; creates account with its first approved client email |
 | `POST /clients/{client}/members` | `{email}`; approves client access |
 | `DELETE /clients/{client}/members` | `{email}`; revokes client access |
 | `POST /clients/{client}/tasks` | New project; fields below |
 | `PATCH /clients/{client}/tasks/{project}/details` | `{id,title,description,requestedBy,source,expectedVersion}`; edit project details |
+| `PATCH /clients/{client}/tasks/{project}/date` | `{id,occurredAt,expectedVersion,emailMessageId?}`; correct the project's work/billing date |
 | `POST /clients/{client}/tasks/{project}/updates` | Progress note; fields below |
 | `PATCH /clients/{client}/tasks/{project}/updates/{update}` | `{occurredAt}`; correct an existing update's event date |
+| `DELETE /clients/{client}/tasks/{project}/updates/{update}` | Hide an update from clients; records/files are retained |
+| `POST /clients/{client}/tasks/{project}/updates/{update}/restore` | Restore a hidden update; no body needed |
 | `PATCH /clients/{client}/tasks/{project}` | Same progress-note body, retained for the dashboard |
 | `POST /clients/{client}/tasks/{project}/attachments/{attachment}` | Raw file bytes; headers below |
 | `GET /clients/{client}/tasks/{project}/attachments/{attachment}` | Private file download |
@@ -104,7 +107,9 @@ verifies an actual paid Stripe Checkout session before awarding credits.
   "requestedBy": "client@example.com",
   "source": "email",
   "credits": 8,
-  "status": "in_progress"
+  "status": "in_progress",
+  "occurredAt": "2026-08-31T15:22:00-07:00",
+  "emailMessageId": "the mailbox's stable source message ID"
 }
 ```
 
@@ -117,6 +122,50 @@ Replaying the same project UUID and original terms does not deduct again.
 Cancellation refunds once; progress updates never deduct additional credits.
 The server supplies actor identity; posted `created_by` or `actor_email` cannot
 impersonate someone else.
+
+`occurredAt` is optional and identifies **when the work happened**, not when it
+was entered. Use the email evidence for that event and an ISO 8601 timestamp with
+its timezone. Work dates must be from 2020 onward and not in the future. If
+omitted, the recording time is used, preserving existing behavior. The task's
+`occurred_at`, the work ledger entry's `occurred_at`, and the project timeline
+show this event date. Their `created_at` values remain server audit timestamps.
+`emailMessageId` is optional and retained privately in staff `workDateHistory`;
+do not put raw private email threads in the client-visible brief.
+
+**Monthly billing now uses the project's work date.** Reviews are cumulative
+through the selected completed UTC month. Purchased credits and already issued
+invoices cover the oldest active work first; `credits` is remaining unbilled
+debt, not gross hours or all credits spent. A fully prepaid project therefore
+does not produce an additional invoice. Cancelling removes that project's own
+charge. Top-ups do not revive previously covered old debt.
+
+For projects already imported, **correct the existing record instead of creating
+another project**:
+
+```json
+{
+  "id": "a new UUID saved for this correction and reused on retry",
+  "occurredAt": "2026-08-31T15:22:00-07:00",
+  "expectedVersion": 0,
+  "emailMessageId": "the source email's stable message ID"
+}
+```
+
+Send this to `PATCH /clients/{client}/tasks/{project}/date`. Read
+`expectedVersion` from the current task's `details_version` (the example's zero
+is not a value to guess). A correction changes month attribution without
+deducting credits again, recreating projects, or changing IDs, descriptions,
+progress, files or status. It preserves an audit of the previous date, new date,
+source email and actor. Both date and detail edits increment `details_version`;
+stale corrections return 409. James's admin key includes this operation;
+restricted keys need `billing:dates`.
+
+Issued, preparing, and paid invoices lock work dates covered by their cutoff.
+Corrections that reassign those dates return 409. An unpaid invoice can be
+resolved through the existing void/review workflow; paid invoices cannot be
+voided here. Drafts must match the current reviewed debt exactly at issuance.
+If historical work or a date correction changes a draft's amount, cancel it and
+review again. The API does not rewrite Stripe invoices or charge a correction.
 
 Staff can edit the title, brief, requester and source with the details PATCH
 route. Send a new edit UUID and the current project's `details_version` as
@@ -168,6 +217,26 @@ retry accidentally uses a different update UUID. Replays must preserve the note,
 source and explicitly supplied status. An omitted-status replay does not undo
 later status changes. Different content for an existing reference returns 409.
 Deduplication is per project; match the intended project before posting.
+
+## Hide and restore duplicate/test updates
+
+Use the individual update DELETE route to hide a selected update and the restore
+POST route to undo it. These operations return the refreshed account. Repeating
+hide while already hidden or restore while already visible is harmless. James's
+admin key can use both; restricted keys need `projects:moderate`.
+
+Clients cannot see hidden notes, their file metadata, or download their files
+through the API. Brief files and other visible updates remain available. Staff
+can inspect all retained updates and attachments; hidden rows have `hidden_at`
+and `hidden_actor_email`. The project page hides these rows by default and offers
+**Show hidden updates**, with a **Restore** action on each one. Their images are
+excluded from the main carousel until restored.
+
+Hiding does not change project status, cancel work, undo a refund, alter credit
+balances, or affect billing reviews. Ingestion time, event date, email references
+and R2 files stay intact; visibility changes retain actor/timestamp audits.
+Re-ingesting the same email/update does not restore a hidden entry. Hide the
+specific duplicate/test entries rather than altering legitimate project records.
 
 **Briefs, notes and attachments are visible to clients.** Only source references
 are private to staff. Summarize client-relevant progress; do not copy private
@@ -241,6 +310,6 @@ or request bodies. A null response status indicates an interrupted or unfinished
 request and needs reconciliation against the project/invoice records.
 
 For a restricted integration, supported scopes are `clients:read`,
-`projects:create`, `projects:update`, `projects:cancel`, `attachments:write`,
-`billing:read`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
+`projects:create`, `projects:update`, `projects:moderate`, `projects:cancel`, `attachments:write`,
+`billing:read`, `billing:dates`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
 requires both update and cancel; `admin` includes every existing staff API route.

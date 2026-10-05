@@ -1,6 +1,6 @@
 import {PortalError,isStaffEmail,normalizeEmail} from './domain.mjs';
 
-export const agentScopes=['admin','clients:read','projects:update','projects:create','projects:cancel','attachments:write','billing:read','billing:draft','billing:issue','billing:void'];
+export const agentScopes=['admin','clients:read','projects:update','projects:moderate','projects:create','projects:cancel','attachments:write','billing:read','billing:dates','billing:draft','billing:issue','billing:void'];
 export const jamesScopes=['admin'];
 export async function tokenHash(token) {
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token)))].map(byte=>byte.toString(16).padStart(2,'0')).join('');
@@ -30,6 +30,8 @@ export function authorizeAgent(actor,path,method) {
   else if(method==='POST' && /^\/v1\/clients\/[^/]+\/invoices$/.test(path))scope='billing:draft';
   else if(method==='POST' && /^\/v1\/clients\/[^/]+\/invoices\/[^/]+\/(issue|refresh|void)$/.test(path))scope={issue:'billing:issue',refresh:'billing:read',void:'billing:void'}[path.split('/').at(-1)];
   else if(method==='POST' && /^\/v1\/clients\/[^/]+\/tasks$/.test(path))scope='projects:create';
+  else if(method==='PATCH' && /^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/date$/.test(path))scope='billing:dates';
+  else if((method==='DELETE' && /^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/updates\/[^/]+$/.test(path)) || (method==='POST' && /^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/updates\/[^/]+\/restore$/.test(path)))scope='projects:moderate';
   else if((method==='PATCH' && /^\/v1\/clients\/[^/]+\/tasks\/[^/]+(?:\/(?:updates\/[^/]+|details))?$/.test(path)) || (method==='POST' && /^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/updates$/.test(path)))scope='projects:update';
   if(!scope)throw new PortalError(403,'This operation is not available to agent keys.');
   requireAgentScope(actor,scope);

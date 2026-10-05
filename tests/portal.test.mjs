@@ -30,6 +30,8 @@ function fixture(extraEnv = {}) {
   sqlite.exec(readFileSync(new URL('../backend/migrations/0005_agents.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0006_update_dates.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0007_project_edits.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0008_hidden_updates.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0009_work_dates.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -224,6 +226,116 @@ test('competing project detail edits cannot overwrite each other even with ident
   assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM project_edits').get().n,1);
   assert.equal(f.sqlite.prepare('SELECT details_version FROM tasks').get().details_version,1);
   assert.equal((await f.call(staff,`/clients/${clientId}`)).data.balance,-4);
+});
+test('hiding and restoring updates protects client notes and attachment downloads while retaining records and charges',async()=>{
+  const bucket=attachmentStorage(),f=fixture({ATTACHMENTS:bucket}),key=await agentKey(f),clientId=await f.client(),task=f.work();
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const update={id:crypto.randomUUID(),note:'Debug duplicate.',source:{type:'email',id:'debug-message'}};
+  const path=`/clients/${clientId}/tasks/${task.id}/updates/${update.id}`,fileId=crypto.randomUUID(),briefId=crypto.randomUUID();
+  await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',update);
+  await f.file(key.actor,clientId,task.id,fileId,'POST','update bytes',{},update.id);
+  await f.file(key.actor,clientId,task.id,briefId);
+  assert.equal((await f.call(contact,path,'DELETE')).status,403);
+  const limited=await agentKey(f,['clients:read','projects:update']);assert.equal((await f.call(limited.actor,path,'DELETE')).status,403);
+  const hidden=await f.call(key.actor,path,'DELETE');assert.equal(hidden.status,200);assert.equal(hidden.data.updates[0].hidden_actor_email,key.actor.email);
+  assert.equal((await f.call(key.actor,path,'DELETE')).status,200);
+  const visible=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(visible.updates.length,0);assert.deepEqual(visible.attachments.map(file=>file.id),[briefId]);assert.equal(visible.balance,-4);assert.equal(visible.tasks[0].status,'in_progress');
+  assert.equal((await f.file(contact,clientId,task.id,fileId,'GET')).status,404);
+  assert.equal((await f.file(key.actor,clientId,task.id,fileId,'GET')).status,200);
+  assert.equal((await f.file(contact,clientId,task.id,briefId,'GET')).status,200);
+  assert.equal(bucket.objects.size,2);assert.equal(hidden.data.sourceReferences.length,1);
+  assert.equal((await f.call(key.actor,`/clients/${clientId}/tasks/${task.id}/updates`,'POST',update)).data.updates[0].hidden_at,hidden.data.updates[0].hidden_at);
+  assert.equal((await f.call(contact,`${path}/restore`,'POST')).status,403);
+  assert.equal((await f.call(limited.actor,`${path}/restore`,'POST')).status,403);
+  assert.equal((await f.call(key.actor,`${path}/restore`,'POST')).status,200);
+  assert.equal((await f.call(key.actor,`${path}/restore`,'POST')).status,200);
+  const restored=(await f.call(contact,`/clients/${clientId}`)).data;assert.equal(restored.updates.length,1);assert.equal(restored.attachments.length,2);assert.equal(restored.balance,-4);
+  assert.equal((await f.file(contact,clientId,task.id,fileId,'GET')).status,200);
+  const history=f.sqlite.prepare('SELECT action,actor_email FROM update_visibility_changes ORDER BY rowid').all();
+  assert.deepEqual(history.map(row=>row.action),['hide','restore']);assert.equal(history[0].actor_email,key.actor.email);
+  const other=await f.client();assert.equal((await f.call(key.actor,`/clients/${other}/tasks/${task.id}/updates/${update.id}`,'DELETE')).status,404);
+});
+test('hiding cancellation notes never changes cancellation status, refunds or billing debt',async()=>{
+  const f=fixture(),clientId=await f.client(),task=f.work();await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  const update={id:crypto.randomUUID(),note:'Cancellation test.',status:'cancelled'};
+  await f.call(staff,`/clients/${clientId}/tasks/${task.id}`,'PATCH',update);
+  const path=`/clients/${clientId}/tasks/${task.id}/updates/${update.id}`;
+  for(const [method,suffix] of [['DELETE',''],['POST','/restore']]) {
+    const result=await f.call(staff,path+suffix,method);
+    assert.equal(result.status,200);assert.equal(result.data.tasks[0].status,'cancelled');assert.equal(result.data.balance,0);
+    assert.equal(result.data.ledger.filter(entry=>entry.kind==='refund').length,1);
+  }
+});
+test('historical projects use work dates for monthly billing and ledger display while recording one immutable debit now',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client();f.at('2026-10-04T22:00:00.000Z');
+  const january={...f.work(8),occurredAt:'2025-01-15T10:00:00-08:00',emailMessageId:'email-january'};
+  const march={...f.work(4),occurredAt:'2025-03-15T12:00:00Z'};
+  const path=`/clients/${clientId}/tasks`;
+  assert.equal((await f.call(key.actor,path,'POST',january)).status,200);
+  assert.equal((await f.call(key.actor,path,'POST',march)).status,200);
+  assert.equal((await f.call(key.actor,path,'POST',january)).data.balance,-12);
+  assert.equal((await billingPreview(f.DB,clientId,'2024-12')).credits,0);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,8);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,8);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-03')).credits,12);
+  const detail=(await f.call(contact,`/clients/${clientId}`)).data;
+  assert.equal(detail.tasks.find(task=>task.id===january.id).occurred_at,'2025-01-15T18:00:00.000Z');
+  assert.equal(detail.workDateHistory,undefined);assert.equal(detail.ledger.length,2);
+  const entry=detail.ledger.find(entry=>entry.task_id===january.id);
+  assert.equal(entry.occurred_at,'2025-01-15T18:00:00.000Z');assert.equal(entry.created_at,'2026-10-04T22:00:00.000Z');
+  assert.equal(f.sqlite.prepare('SELECT source_message_id FROM project_date_changes WHERE task_id=?').get(january.id).source_message_id,'email-january');
+  assert.equal((await f.call(key.actor,path,'POST',{...january,occurredAt:'2025-02-01T00:00:00Z'})).status,409);
+  assert.equal((await f.call(key.actor,path,'POST',{...f.work(),occurredAt:'2099-01-01T00:00:00Z'})).status,400);
+});
+test('existing work dates can be reassigned safely and stale corrections cannot overwrite another edit',async()=>{
+  const f=fixture(),key=await agentKey(f),clientId=await f.client(),task=f.work(12);f.at('2026-10-04T22:00:00.000Z');
+  await f.call(key.actor,`/clients/${clientId}/tasks`,'POST',task);
+  const ledgerBefore=f.sqlite.prepare('SELECT * FROM ledger ORDER BY rowid').all();
+  const body={id:crypto.randomUUID(),occurredAt:'2025-08-15T12:00:00Z',expectedVersion:0,emailMessageId:'work-request-email'};
+  const path=`/clients/${clientId}/tasks/${task.id}/date`;
+  assert.equal((await f.call(contact,path,'PATCH',body)).status,403);
+  const limited=await agentKey(f,['clients:read','projects:update']);assert.equal((await f.call(limited.actor,path,'PATCH',body)).status,403);
+  const result=await f.call(key.actor,path,'PATCH',body);
+  assert.equal(result.status,200);assert.equal(result.data.tasks[0].details_version,1);assert.equal(result.data.balance,-12);assert.equal(result.data.tasks.length,1);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-07')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,12);
+  assert.equal((await f.call(key.actor,path,'PATCH',body)).data.tasks[0].details_version,1);
+  assert.equal((await f.call(key.actor,path,'PATCH',{...body,id:crypto.randomUUID(),occurredAt:'2025-09-15T12:00:00Z'})).status,409);
+  const changed=await f.call(key.actor,path,'PATCH',{...body,id:crypto.randomUUID(),expectedVersion:1,occurredAt:'2025-09-15T12:00:00Z'});
+  assert.equal(changed.status,200);assert.equal((await billingPreview(f.DB,clientId,'2025-08')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-09')).credits,12);
+  assert.deepEqual(f.sqlite.prepare('SELECT * FROM ledger ORDER BY rowid').all(),ledgerBefore);
+  assert.equal(changed.data.workDateHistory.length,2);
+});
+test('credits cover oldest work first; cancelling newer work does not erase older debt',async()=>{
+  const f=fixture(),clientId=await f.client();f.at('2026-10-04T22:00:00.000Z');
+  const older={...f.work(8),occurredAt:'2025-01-15T12:00:00Z'},newer={...f.work(20),occurredAt:'2025-02-15T12:00:00Z'};
+  for(const task of [newer,older])await f.call(staff,`/clients/${clientId}/tasks`,'POST',task);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,8);
+  await f.fund(clientId,'pi_coverOldest',16);
+  assert.equal((await billingPreview(f.DB,clientId,'2025-01')).credits,0);assert.equal((await billingPreview(f.DB,clientId,'2025-02')).credits,12);
+  // A separate account without purchases proves a refund is specific to its own work.
+  const other=await f.client();for(const task of [older,newer])await f.call(staff,`/clients/${other}/tasks`,'POST',{...task,id:crypto.randomUUID()});
+  const newerOther=(await f.call(staff,`/clients/${other}`)).data.tasks.find(task=>task.credits===20);
+  await f.call(staff,`/clients/${other}/tasks/${newerOther.id}`,'PATCH',{id:crypto.randomUUID(),status:'cancelled',note:'Duplicate newer work.'});
+  assert.equal((await billingPreview(f.DB,other,'2025-01')).credits,8);
+});
+test('issued invoices lock covered work dates; drafts must match freshly reviewed historical debt exactly',async()=>{
+  const f=await overdueFixture(),key=await agentKey(f),stripe=invoiceStripe();
+  await f.call(key.actor,`/clients/${f.clientId}/invoices`,'POST',f.draft);
+  const additional={...f.work(4),occurredAt:'2025-01-20T12:00:00Z'};
+  await f.call(key.actor,`/clients/${f.clientId}/tasks`,'POST',additional);
+  await assert.rejects(issueInvoice(testStripeEnv,f.DB,f.clientId,f.draft.id,stripe),/outstanding credits changed/);assert.equal(stripe.records.size,0);
+  await voidInvoice(testStripeEnv,f.DB,f.clientId,f.draft.id,stripe);
+  const draft={...f.draft,id:crypto.randomUUID(),credits:12};await f.call(key.actor,`/clients/${f.clientId}/invoices`,'POST',draft);
+  await issueInvoice(testStripeEnv,f.DB,f.clientId,draft.id,stripe);
+  const body={id:crypto.randomUUID(),occurredAt:'2025-02-15T12:00:00Z',expectedVersion:0};
+  const path=`/clients/${f.clientId}/tasks/${f.task.id}/date`;
+  assert.equal((await f.call(key.actor,path,'PATCH',body)).status,409);
+  assert.equal(f.sqlite.prepare('SELECT count(*) AS n FROM project_date_changes WHERE task_id=?').get(f.task.id).n,0);
+  assert.equal((await billingPreview(f.DB,f.clientId,'2025-01')).credits,0);
+  await voidInvoice(testStripeEnv,f.DB,f.clientId,draft.id,stripe);
+  assert.equal((await f.call(key.actor,path,'PATCH',body)).status,200);
+  assert.equal((await billingPreview(f.DB,f.clientId,'2025-01')).credits,0);assert.equal((await billingPreview(f.DB,f.clientId,'2025-02')).credits,12);
 });
 
 test('attachments require staff uploads and current client membership for private downloads',async()=>{

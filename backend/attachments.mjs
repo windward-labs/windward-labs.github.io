@@ -34,7 +34,7 @@ export async function handleAttachment(request,env,db,actor,clientId,taskId,atta
   if (!task) throw new PortalError(404,'Work not found.');
   if (!env.ATTACHMENTS) throw new PortalError(503,'Attachment storage is not configured.');
   if (request.method === 'GET') {
-    const attachment = await query(db,'SELECT * FROM attachments WHERE id=? AND task_id=? AND ready=1',attachmentId,taskId).first();
+    const attachment = await query(db,'SELECT a.* FROM attachments a LEFT JOIN task_updates u ON u.id=a.update_id WHERE a.id=? AND a.task_id=? AND a.ready=1 AND (?=1 OR a.update_id IS NULL OR (u.id IS NOT NULL AND u.hidden_at IS NULL))',attachmentId,taskId,actor.staff ? 1 : 0).first();
     if (!attachment) throw new PortalError(404,'Attachment not found.');
     const object = await env.ATTACHMENTS.get(key(clientId,taskId,attachmentId));
     if (!object) throw new PortalError(404,'Attachment not found.');

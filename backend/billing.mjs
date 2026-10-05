@@ -4,14 +4,14 @@ import { creditPriceCents } from '../src/services/pricing.mjs';
 
 const query=(db,sql,...values)=>db.prepare(sql).bind(...values);
 export const invoicedCreditsSql=`COALESCE((SELECT SUM(i.credits) FROM invoices i WHERE i.client_id=c.id AND i.status IN ('issuing','open')),0)`;
-// The highest running balance since month-end tells us how much of that debt
-// remains uncovered. Later work can't revive debt already covered by a top-up.
-// Ignore a voided invoice's transfer/reversal so its debt becomes billable again.
-const activeEntry=`(l.kind!='billing' OR EXISTS(SELECT 1 FROM invoices i WHERE l.id='invoice:'||i.id AND i.status IN ('issuing','open','paid')))`;
-const dueSql=`MAX(0,MIN(-c.balance,-COALESCE((SELECT MAX(running) FROM (
-  SELECT l.rowid AS seq,l.created_at,SUM(l.credits) OVER(ORDER BY l.rowid ROWS UNBOUNDED PRECEDING) AS running
-  FROM ledger l WHERE l.client_id=c.id AND ${activeEntry})
-  WHERE created_at>=? OR seq=(SELECT MAX(l.rowid) FROM ledger l WHERE l.client_id=c.id AND l.created_at<? AND ${activeEntry})),0)))`;
+// Purchased credits and invoice transfers cover the oldest active work first.
+// Cancellations remove their own charge; they must not pay unrelated old debt.
+// Work dates, rather than ingestion order, determine month attribution.
+export const ledgerEventDate=`CASE WHEN l.kind='work' THEN COALESCE((SELECT t.occurred_at FROM tasks t WHERE t.id=l.task_id),l.created_at) ELSE l.created_at END`;
+const dueSql=`MAX(0,MIN(-c.balance,
+  COALESCE((SELECT SUM(t.credits) FROM tasks t WHERE t.client_id=c.id AND t.status!='cancelled' AND COALESCE(t.occurred_at,t.created_at)<?),0)
+  -COALESCE((SELECT SUM(l.credits) FROM ledger l WHERE l.client_id=c.id AND l.kind='purchase'),0)
+  -COALESCE((SELECT SUM(i.credits) FROM invoices i WHERE i.client_id=c.id AND i.status IN ('issuing','open','paid')),0)))`;
 export function billingPeriod(period,now=new Date()) {
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(period || '') || period<'2020-01' || period>=now.toISOString().slice(0,7)) throw new PortalError(400,'Choose a completed billing month.');
   const [year,month]=period.split('-').map(Number);
@@ -19,7 +19,7 @@ export function billingPeriod(period,now=new Date()) {
 }
 export async function billingPreview(db,clientId,period) {
   const cutoff=billingPeriod(period);
-  const row=await query(db,`SELECT ${dueSql} AS credits FROM clients c WHERE c.id=?`,cutoff,cutoff,clientId).first();
+  const row=await query(db,`SELECT ${dueSql} AS credits FROM clients c WHERE c.id=?`,cutoff,clientId).first();
   return {period,cutoff,credits:row.credits,amountCents:row.credits*creditPriceCents};
 }
 export async function createInvoiceDraft(env,db,actor,clientId,body) {
@@ -34,7 +34,7 @@ export async function createInvoiceDraft(env,db,actor,clientId,body) {
   // The expected amount protects a staff review from concurrent top-ups/refunds.
   await query(db,`INSERT INTO invoices (id,client_id,period,cutoff,email,credits,amount_cents,stripe_mode,created_by,actor_email)
     SELECT ?,c.id,?,?,?,?,?,?,?,? FROM clients c WHERE c.id=? AND ${dueSql}=?`,
-    invoiceId,body.period,cutoff,email,body.credits,body.credits*creditPriceCents,env.STRIPE_MODE,actor.id,actor.email,clientId,cutoff,cutoff,body.credits).run();
+    invoiceId,body.period,cutoff,email,body.credits,body.credits*creditPriceCents,env.STRIPE_MODE,actor.id,actor.email,clientId,cutoff,body.credits).run();
   if (!await query(db,'SELECT id FROM invoices WHERE id=?',invoiceId).first()) throw new PortalError(409,'The balance changed. Refresh the billing review before creating a draft.');
 }
 async function invoiceRecord(db,clientId,invoiceId) {
@@ -63,8 +63,8 @@ export async function issueInvoice(env,db,clientId,invoiceId,stripe=stripeClient
   if (record.stripe_mode!==env.STRIPE_MODE) throw new PortalError(409,'Invoice payment environment does not match.');
   if (record.status==='paid' || record.status==='void' || record.status==='open') return;
   if (record.status==='draft') {
-    await query(db,`UPDATE invoices SET status='issuing' WHERE id=? AND status='draft' AND credits<=
-      (SELECT ${dueSql} FROM clients c WHERE c.id=invoices.client_id)`,record.id,record.cutoff,record.cutoff).run();
+    await query(db,`UPDATE invoices SET status='issuing' WHERE id=? AND status='draft' AND credits=
+      (SELECT ${dueSql} FROM clients c WHERE c.id=invoices.client_id)`,record.id,record.cutoff).run();
     record=await invoiceRecord(db,clientId,invoiceId);
     if (record.status==='draft') throw new PortalError(409,'The outstanding credits changed. Cancel this draft and review the updated balance.');
   }
