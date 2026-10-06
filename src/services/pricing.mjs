@@ -4,7 +4,7 @@ export const normalCreditsPerHour = 4;
 export const creditPacks = [
   { credits: 8, name: 'Quick Ask', description: 'Small website updates, tweaks, and other straightforward requests.' },
   { credits: 16, name: 'Focused Project', description: 'A single feature redesign or an initial product mockup to build on.' },
-  { credits: 32, name: 'Collaborative Project', description: 'New features and projects from scratch, shaped through exploration, feedback, and iteration.' },
+  { credits: 64, name: 'Collaborative Project', description: 'New features and projects from scratch, shaped through exploration, feedback, and iteration.' },
   { credits: 192, name: 'Embedded Design', description: 'Ongoing design support for larger initiatives, working as an extension of your team.' },
 ].map((pack) => ({
   ...pack,

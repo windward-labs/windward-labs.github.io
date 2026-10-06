@@ -1008,7 +1008,7 @@ test('fixed charges respect issued billing locks while internal hours remain non
   assert.equal((await f.call(staff,`${path}/time-entries`,'POST',{id:crypto.randomUUID(),occurredAt:charge.occurredAt,hours:20,note:'Actual effort'})).data.balance,before);
 });
 
-test('192-credit Embedded Design and legacy 64-credit purchases fulfill once at their exact prices',async()=>{
+test('192-credit Embedded Design and 64-credit Collaborative Project purchases fulfill once at their exact prices',async()=>{
   const testPrices={192:'price_1UNLBgLFTZ7EIElERZnxNG1I',64:'price_1UMiOLLFTZ7EIElE4bh23C35'};
   for(const credits of [192,64])for(const mode of ['test','live']) {
     const f=fixture(),clientId=await f.client(),session=paidSession(clientId);

@@ -504,14 +504,14 @@ function AttachmentList({attachments,clientId,taskId,api}:{attachments:Attachmen
 
 function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:string;automaticPayments:boolean}) {
   const clientId = client.id;
-  const [credits,setCredits] = useState<8 | 16 | 32 | 192>(32);
-  const pack = creditPacks.find(pack=>pack.credits===credits) || creditPacks.find(pack=>pack.credits===32)!;
-  useEffect(()=>{if(!creditPacks.some(pack=>pack.credits===credits))setCredits(32);},[credits]);
+  const [credits,setCredits] = useState<8 | 16 | 64 | 192>(64);
+  const pack = creditPacks.find(pack=>pack.credits===credits) || creditPacks.find(pack=>pack.credits===64)!;
+  useEffect(()=>{if(!creditPacks.some(pack=>pack.credits===credits))setCredits(64);},[credits]);
   const testMode = import.meta.env.DEV;
   const link = checkoutLink(credits,testMode,{
     8:import.meta.env.PUBLIC_STRIPE_TEST_LINK_8,
     16:import.meta.env.PUBLIC_STRIPE_TEST_LINK_16,
-    32:import.meta.env.PUBLIC_STRIPE_TEST_LINK_32,
+    64:import.meta.env.PUBLIC_STRIPE_TEST_LINK_64,
     192:import.meta.env.PUBLIC_STRIPE_TEST_LINK_192,
   });
   const url = link ? new URL(link) : null;
@@ -530,7 +530,7 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
         const savings = option.credits * creditPriceCents - option.amountCents;
         const lastPurchase = client.ledger.find(entry=>entry.kind==='purchase');
         return <label key={option.credits} className={`portal-pack ${credits===option.credits ? 'portal-pack-selected' : ''}`}>
-          <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 8 | 16 | 32 | 192)}/>
+          <input type="radio" name="credit-pack" value={option.credits} checked={credits===option.credits} onChange={()=>setCredits(option.credits as 8 | 16 | 64 | 192)}/>
           <span className="portal-pack-content">
             <span className="row portal-pack-heading"><span>{option.name}</span><span>{formatPrice(option.amountCents)}</span></span>
             <span className="muted">{option.credits} credits{savings>0 && ` · Save ${formatPrice(savings)}`}</span>
