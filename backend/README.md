@@ -10,6 +10,10 @@ Persistent agents can use individually hashed, expiring and revocable bearer
 keys. See [James's API integration guide](AGENT_API.md) for provisioning, project
 updates, attachments, email reference deduplication and billing routes.
 
+UI pricing uses credits and project or pack totals. Never display dollar-per-hour
+rates, including in staff views, tooltips, or time-entry previews. Staff can see
+hours-to-credits conversions; accounting calculations remain unchanged.
+
 ## Local setup
 
 1. In Privy, enable email login and allow `http://localhost:4321` and
