@@ -124,13 +124,15 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const [workSuccess,setWorkSuccess] = useState<{id:string;credits:number;balance:number}|null>(null);
   const [pricingModel,setPricingModel]=useState<'fixed'|'hourly'>('fixed');
   const [fixedPrice,setFixedPrice]=useState('');
+  const [fixedPackage,setFixedPackage]=useState('');
+  const fixedCreditsValue=fixedPackage==='custom' ? fixedPrice : fixedPackage;
   const [chargeTiming,setChargeTiming]=useState('upfront');
   const [workFiles,setWorkFiles] = useState<PendingFile[]>([]);
   const [fileError,setFileError] = useState('');
   const activeProjects = client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress');
   const completedProjects = client.tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
   const activity=creditActivity(client.ledger,client.workEntries);
-  const workCredits = pricingModel==='fixed' ? (chargeTiming==='upfront' ? Number(fixedPrice) : 0) : 0;
+  const workCredits = pricingModel==='fixed' ? (chargeTiming==='upfront' ? Number(fixedCreditsValue) : 0) : 0;
   const validWorkCredits = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
@@ -179,12 +181,15 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
           throw new Error(`Work was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Submit again to retry the attachments; credits will not be deducted again.`);
         }
         if (workFiles.length) {savedClient = await api<ClientDetail>(`/clients/${client.id}`);setClient(savedClient);}
-        setWorkFiles([]);setFixedPrice('');setPricingModel('fixed');setChargeTiming('upfront');
+        setWorkFiles([]);setFixedPrice('');setFixedPackage('');setPricingModel('fixed');setChargeTiming('upfront');
         setWorkSuccess({id,credits,balance:savedClient.balance});
         setShowWorkForm(false);setWorkFormRevision(value=>value+1);
       }}>
         <div><span className="portal-field-label"><label htmlFor="work-pricing-model">Project type</label><span className="portal-info portal-pricing-info"><button type="button" className="portal-info-button" aria-label="About project pricing" aria-describedby="work-pricing-info">ⓘ</button><span id="work-pricing-info" role="tooltip">{pricingModel==='fixed' ? 'A fixed price for the agreed scope. Hours are tracked privately without additional charges.' : 'Hourly work is charged as time is logged: 4 credits per hour.'}</span></span></span><select id="work-pricing-model" name="pricingModel" value={pricingModel} onChange={event=>setPricingModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></div>
-        {pricingModel==='fixed' ? <><div className="fields"><label>Agreed price (credits)<input name="fixedCredits" type="number" required min={1} max={10000} step={1} value={fixedPrice} onChange={event=>setFixedPrice(event.target.value)}/></label><label>Charge timing<select name="chargeTiming" value={chargeTiming} onChange={event=>setChargeTiming(event.target.value)}><option value="upfront">Charge upfront</option><option value="milestones">Charge by milestones</option></select></label></div>{Number(fixedPrice)>0 && <p className="caption muted">{formatPrice(Number(fixedPrice)*creditPriceCents)}</p>}</> : null}
+        {pricingModel==='fixed' && <>
+          <div className="fields"><label>Package<select name="fixedPackage" required value={fixedPackage} onChange={event=>setFixedPackage(event.target.value)}><option value="" disabled>Choose a package</option>{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.name} · {pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}<option value="custom">Custom amount</option></select></label><label>Charge timing<select name="chargeTiming" value={chargeTiming} onChange={event=>setChargeTiming(event.target.value)}><option value="upfront">Charge upfront</option><option value="milestones">Charge by milestones</option></select></label></div>
+          {fixedPackage==='custom' ? <><label>Custom amount (credits)<input name="fixedCredits" type="number" required min={1} max={10000} step={1} value={fixedPrice} onChange={event=>setFixedPrice(event.target.value)}/></label>{Number(fixedPrice)>0 && <p className="caption muted">{formatPrice(Number(fixedPrice)*creditPriceCents)}</p>}</> : <input name="fixedCredits" type="hidden" value={fixedCreditsValue}/>}
+        </>}
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
