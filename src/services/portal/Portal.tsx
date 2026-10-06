@@ -122,7 +122,6 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const [workSaving,setWorkSaving] = useState(false);
   const [workFormRevision,setWorkFormRevision] = useState(0);
   const [workSuccess,setWorkSuccess] = useState<{id:string;credits:number;balance:number}|null>(null);
-  const [workHours,setWorkHours] = useState('');
   const [pricingModel,setPricingModel]=useState<'fixed'|'hourly'>('fixed');
   const [fixedPrice,setFixedPrice]=useState('');
   const [chargeTiming,setChargeTiming]=useState('upfront');
@@ -131,8 +130,8 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const activeProjects = client.tasks.filter(task=>task.status==='queued'||task.status==='in_progress');
   const completedProjects = client.tasks.filter(task=>task.status==='completed'||task.status==='cancelled');
   const activity=creditActivity(client.ledger,client.workEntries);
-  const workCredits = pricingModel==='fixed' ? (chargeTiming==='upfront' ? Number(fixedPrice) : 0) : Number(workHours) * normalCreditsPerHour;
-  const validWorkHours = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
+  const workCredits = pricingModel==='fixed' ? (chargeTiming==='upfront' ? Number(fixedPrice) : 0) : 0;
+  const validWorkCredits = Number.isSafeInteger(workCredits) && workCredits > 0 && workCredits <= 10000;
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
   return <>
@@ -165,15 +164,12 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         if (fileError) throw new Error(fileError);
         const fixed=form.get('pricingModel')==='fixed';
         const fixedCredits=fixed ? Number(form.get('fixedCredits')) : null;
-        const budgetCredits=!fixed && form.get('budgetCredits') ? Number(form.get('budgetCredits')) : null;
-        const credits = fixed ? (form.get('chargeTiming')==='upfront' ? fixedCredits! : 0) : Number(form.get('hours')) * normalCreditsPerHour;
-        if (!Number.isSafeInteger(credits) || credits < 0 || credits > 10000) throw new Error('Enter hours in 0.25-hour increments, from 0.25 to 2,500, or leave blank.');
-        if(!fixed && budgetCredits!==null && credits>budgetCredits)throw new Error('Initial hours exceed the approved budget.');
-        const workDate=String(form.get('occurredAt') || '');
-        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:0,status:form.get('status'),pricingModel:fixed ? 'fixed' : 'hourly',fixedCredits,budgetCredits});
+        const credits = fixed && form.get('chargeTiming')==='upfront' ? fixedCredits! : 0;
+        if (fixed && (!Number.isSafeInteger(fixedCredits) || fixedCredits! < 1 || fixedCredits! > 10000)) throw new Error('Enter an agreed price from 1 to 10,000 whole credits.');
+        let savedClient = await api<ClientDetail>(`/clients/${client.id}/tasks`,'POST',{id,title:form.get('title'),description:form.get('description'),requestedBy:form.get('requestedBy'),source:form.get('source'),credits:0,status:'in_progress',pricingModel:fixed ? 'fixed' : 'hourly',fixedCredits});
         if(credits>0) {
-          const occurredAt=workDate ? new Date(workDate).toISOString() : savedClient.tasks.find(task=>task.id===id)!.created_at;
-          savedClient=await api<ClientDetail>(`/clients/${client.id}/tasks/${id}/${fixed ? 'charges' : 'work-entries'}`,'POST',{id,occurredAt,...(fixed ? {} : {hours:credits/normalCreditsPerHour}),credits,note:fixed ? `Agreed price: ${String(form.get('title'))}` : form.get('description')});
+          const occurredAt=savedClient.tasks.find(task=>task.id===id)!.created_at;
+          savedClient=await api<ClientDetail>(`/clients/${client.id}/tasks/${id}/charges`,'POST',{id,occurredAt,credits,note:`Agreed price: ${String(form.get('title'))}`});
         }
         setClient(savedClient);
         try {
@@ -183,20 +179,17 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
           throw new Error(`Work was saved. ${error instanceof Error ? error.message : 'An attachment could not be uploaded.'} Submit again to retry the attachments; credits will not be deducted again.`);
         }
         if (workFiles.length) {savedClient = await api<ClientDetail>(`/clients/${client.id}`);setClient(savedClient);}
-        setWorkFiles([]);setWorkHours('');setFixedPrice('');setPricingModel('fixed');setChargeTiming('upfront');
+        setWorkFiles([]);setFixedPrice('');setPricingModel('fixed');setChargeTiming('upfront');
         setWorkSuccess({id,credits,balance:savedClient.balance});
         setShowWorkForm(false);setWorkFormRevision(value=>value+1);
       }}>
-        <label>Project type<select name="pricingModel" value={pricingModel} onChange={event=>setPricingModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></label>
-        {pricingModel==='fixed' ? <><div className="fields"><label>Agreed price (credits)<input name="fixedCredits" type="number" required min={1} max={10000} step={1} value={fixedPrice} onChange={event=>setFixedPrice(event.target.value)}/></label><label>Charge timing<select name="chargeTiming" value={chargeTiming} onChange={event=>setChargeTiming(event.target.value)}><option value="upfront">Charge upfront</option><option value="milestones">Charge by milestones</option></select></label></div><p className="caption muted">{Number(fixedPrice)>0 ? `${formatPrice(Number(fixedPrice)*creditPriceCents)} · ` : ''}A fixed price for the agreed scope. Hours are tracked privately without additional charges.</p></> : <><label>Approved budget (credits, optional)<input name="budgetCredits" type="number" min={1} max={10000} step={1}/></label><p className="caption muted">Actual time costs 4 credits per hour ($300/hour). Further work requires approval when the budget is reached.</p></>}
+        <div><span className="portal-field-label"><label htmlFor="work-pricing-model">Project type</label><span className="portal-info portal-pricing-info"><button type="button" className="portal-info-button" aria-label="About project pricing" aria-describedby="work-pricing-info">ⓘ</button><span id="work-pricing-info" role="tooltip">{pricingModel==='fixed' ? 'A fixed price for the agreed scope. Hours are tracked privately without additional charges.' : 'Hourly work is charged as time is logged: 4 credits per hour ($300/hour).'}</span></span></span><select id="work-pricing-model" name="pricingModel" value={pricingModel} onChange={event=>setPricingModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></div>
+        {pricingModel==='fixed' ? <><div className="fields"><label>Agreed price (credits)<input name="fixedCredits" type="number" required min={1} max={10000} step={1} value={fixedPrice} onChange={event=>setFixedPrice(event.target.value)}/></label><label>Charge timing<select name="chargeTiming" value={chargeTiming} onChange={event=>setChargeTiming(event.target.value)}><option value="upfront">Charge upfront</option><option value="milestones">Charge by milestones</option></select></label></div>{Number(fixedPrice)>0 && <p className="caption muted">{formatPrice(Number(fixedPrice)*creditPriceCents)}</p>}</> : null}
         <Field label="Title" name="title" maxLength={160}/><label>Work description<textarea name="description" required maxLength={2000} rows={4} placeholder="Describe the brief. This is visible to the client."/></label>
         <AttachmentPicker helpId="work-attachments-help" filesChanged={setWorkFiles} errorChanged={setFileError}/>
         {fileError && <p role="alert">{fileError}</p>}
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
-        <div className="fields">{pricingModel==='hourly' && <div><span className="portal-field-label"><label htmlFor="work-hours">Initial hours (optional)</label><span className="portal-info"><button type="button" className="portal-info-button" aria-label="Hours to credits conversion" aria-describedby="work-hours-rate">ⓘ</button><span id="work-hours-rate" role="tooltip">1 hour = {normalCreditsPerHour} credits. Log time in 15-minute increments (0.25 hours).</span></span></span><input id="work-hours" name="hours" type="number" min={1 / normalCreditsPerHour} max={10000 / normalCreditsPerHour} step={1 / normalCreditsPerHour} value={workHours} onChange={event=>setWorkHours(event.target.value)}/></div>}<label>Status<select name="status" defaultValue="in_progress"><option value="queued">Queued</option><option value="in_progress">In progress</option><option value="completed">Completed</option></select></label></div>
-        {validWorkHours && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
-        <label>{pricingModel==='fixed' ? 'Charge date (optional)' : 'Work date (optional)'}<input type="datetime-local" name="occurredAt" step={1} max={localDateTime(new Date().toISOString())}/></label><p className="caption muted">Leave blank to use today. Billing months use UTC.</p>
-        <p className="caption muted">{pricingModel==='fixed' ? 'Upfront charges use this date. Milestone projects start without a charge.' : 'Initial hours create a dated work entry. Leave blank to start without a charge.'}</p>
+        {validWorkCredits && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
       </MutationForm></ProjectDialog>}
         {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div>}
       </section>
@@ -391,8 +384,8 @@ function ProjectAgreement({task,client,staff,api,setClient}:{task:Task;client:Cl
     }}><p className="caption muted">Up to {remaining} credits remain within the agreed price. This deducts credits once.</p><label>Credits<input name="credits" type="number" required min={1} max={remaining || 1} step={1}/></label><label>Charge date<input name="occurredAt" type="datetime-local" required step={1} defaultValue={localDateTime(new Date().toISOString())} max={localDateTime(new Date().toISOString())}/></label><label>Milestone summary<textarea name="note" required maxLength={2000} rows={3} placeholder="Visible to the client"/></label></MutationForm></ProjectDialog>}
     {staff && <ProjectDialog id="change-project-agreement" title="Change agreement" open={editing} busy={busy} onClose={()=>setEditing(false)}><MutationForm label="Save approved agreement" onBusyChange={setBusy} submit={async(form,id)=>{
       if(form.get('approved')!=='on')throw new Error('Confirm client approval before changing the agreement.');
-      setClient(await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/agreement`,'PATCH',{id,expectedVersion:task.details_version || 0,pricingModel:model,fixedCredits:model==='fixed' ? Number(form.get('fixedCredits')) : null,budgetCredits:model==='hourly' && form.get('budgetCredits') ? Number(form.get('budgetCredits')) : null,approvalNote:form.get('approvalNote')}));setEditing(false);setNotice('Agreement updated. Existing charges are unchanged.');
-    }}><label>Project type<select value={model} onChange={event=>setModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></label>{model==='fixed' ? <label>Approved fixed price (credits)<input name="fixedCredits" type="number" required min={Math.max(1,task.credits)} max={10000} step={1} defaultValue={task.fixed_credits ?? Math.max(1,task.credits)}/></label> : <label>Approved budget (credits, optional)<input name="budgetCredits" type="number" min={Math.max(1,task.credits)} max={10000} step={1} defaultValue={task.budget_credits ?? ''}/></label>}<p className="caption muted">Existing charges stay intact. A higher fixed price can be charged separately as a milestone.</p><label>Client approval reference<textarea name="approvalNote" required maxLength={2000} rows={3} placeholder="When and where the client approved this change; private to staff"/></label><label><input name="approved" type="checkbox" required/> The client has approved this agreement.</label></MutationForm></ProjectDialog>}
+      setClient(await api<ClientDetail>(`/clients/${client.id}/tasks/${task.id}/agreement`,'PATCH',{id,expectedVersion:task.details_version || 0,pricingModel:model,fixedCredits:model==='fixed' ? Number(form.get('fixedCredits')) : null,budgetCredits:model==='hourly' ? task.budget_credits ?? null : null,approvalNote:form.get('approvalNote')}));setEditing(false);setNotice('Agreement updated. Existing charges are unchanged.');
+    }}><label>Project type<select value={model} onChange={event=>setModel(event.target.value as 'fixed'|'hourly')}><option value="fixed">Fixed price</option><option value="hourly">Hourly</option></select></label>{model==='fixed' ? <label>Approved fixed price (credits)<input name="fixedCredits" type="number" required min={Math.max(1,task.credits)} max={10000} step={1} defaultValue={task.fixed_credits ?? Math.max(1,task.credits)}/></label> : null}<p className="caption muted">Existing charges stay intact. A higher fixed price can be charged separately as a milestone.</p><label>Client approval reference<textarea name="approvalNote" required maxLength={2000} rows={3} placeholder="When and where the client approved this change; private to staff"/></label><label><input name="approved" type="checkbox" required/> The client has approved this agreement.</label></MutationForm></ProjectDialog>}
   </div>;
 }
 
