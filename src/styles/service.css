@@ -139,6 +139,9 @@
 .portal-attachments li { display: flex; align-items: baseline; gap: 12px; margin: 8px 0; }
 .portal-attachments button { overflow-wrap: anywhere; text-align: left; }
 .portal-form input, .portal-form textarea, .portal-form select, .portal-checkout select { margin-top: 8px; font-weight: 400; }
+.workspace .portal-checkbox { display: flex; align-items: flex-start; gap: 10px; font-weight: 400; line-height: 20px; cursor: pointer; }
+.workspace .portal-checkbox input[type="checkbox"] { width: 16px; height: 16px; margin: 2px 0 0; padding: 0; flex: 0 0 16px; accent-color: #171717; box-shadow: none; }
+.portal-agreement-value { margin: 4px 0 0; }
 .workspace .portal-form input[type="file"] { height: auto; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; line-height: 20px; }
 .portal-form input[type="file"]::file-selector-button { min-height: 40px; margin-right: 12px; padding: 8px 16px; border: 1px solid #dedede; border-radius: 4px; background: transparent; color: #171717; font: inherit; cursor: pointer; }
 .portal-form input[type="file"]::file-selector-button:hover { background: #f0f0f0; }
