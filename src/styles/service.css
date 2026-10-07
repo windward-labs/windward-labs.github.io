@@ -298,3 +298,24 @@ body:has(.portal-project-dialog[open]) { overflow: hidden; }
 .portal-invoice-title { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 
 @media (max-width: 640px) { .portal-invoice-controls { justify-content: flex-end; } }
+
+.portal-hour-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.workspace .portal-hour-presets .plain-button { min-width: 64px; gap: 4px; }
+.workspace .portal-hour-presets button[aria-pressed="true"] { background: #171717; color: #fff; border-color: #171717; }
+.portal-work-log .portal-work-summary textarea { min-height: 192px; margin-top: 8px; }
+.portal-work-log label { margin-bottom: 0; }
+.portal-work-time { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; }
+.portal-work-time input { margin: 8px 0; }
+.portal-project-picker { position: relative; min-width: 0; }
+.portal-project-picker-input { position: relative; margin-top: 8px; }
+.portal-project-picker-input input { padding-right: 40px; text-overflow: ellipsis; }
+.workspace .portal-picker-toggle { position: absolute; top: 0; right: 0; width: 40px; height: 40px; border: 0; background: transparent; }
+.portal-project-options { position: absolute; top: 100%; left: 0; right: 0; z-index: 20; margin-top: 4px; padding: 4px; border: 1px solid #d4d4d4; border-radius: 4px; background: #fff; box-shadow: 0 4px 16px rgb(0 0 0 / .08); }
+.portal-project-options ul { list-style: none; padding: 0; margin: 0; max-height: 280px; overflow-y: auto; }
+.portal-project-options li { display: grid; padding: 8px 12px; cursor: pointer; overflow-wrap: anywhere; }
+.portal-project-options .portal-option-highlight { background: #f0f0f0; }
+.portal-project-options > p { padding: 8px 12px; }
+.portal-client-list { display: grid; gap: 8px; }
+.workspace .portal-client-list a { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; text-decoration: none; }
+.workspace .portal-client-list a:hover { text-decoration: underline; }
+@media (max-width: 640px) { .portal-work-time { grid-template-columns: minmax(0, 1fr); } }

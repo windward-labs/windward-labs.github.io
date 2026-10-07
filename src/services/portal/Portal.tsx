@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PrivyProvider, usePrivy } from '@privy-io/react-auth';
 import { creditPacks, creditPriceCents, formatPrice, normalCreditsPerHour } from '../pricing.mjs';
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
 import { creditActivity } from './credit-activity.mjs';
 import { saveProgress } from './save-progress.mjs';
+import { canLogHours, saveWorkLog, validateWorkLog, staffProjects } from './log-hours.mjs';
 import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice, WorkEntry } from './types';
 
 const statusNames: Record<WorkStatus, string> = { queued: 'Queued', in_progress: 'In progress', completed: 'Completed', cancelled: 'Cancelled' };
@@ -32,6 +33,7 @@ function AuthenticatedPortal() {
   const [error,setError] = useState('');
   const [revision,setRevision] = useState(0);
   const [showNewClient,setShowNewClient] = useState(false);
+  const [showAccounts,setShowAccounts] = useState(false);
   const apiUrl = import.meta.env.PUBLIC_SERVICE_API_URL?.replace(/\/$/,'');
   const params = new URLSearchParams(window.location.search);
   const paymentReturn = params.get('payment') === 'returned';
@@ -75,13 +77,15 @@ function AuthenticatedPortal() {
     {sessionTarget && createPortal(<AccountMenu email={actor?.email || user?.email?.address || 'Account'} onSignOut={() => { setActor(null); setClients([]); setClient(null); void logout(); }}/>,sessionTarget)}
     {loading ? <p role="status" className="portal-loading">Loading your account…</p> : error ? <section className="section stack"><h1>Account unavailable</h1><p role="alert">{error}</p><div><button className="plain-button" onClick={() => setRevision(value=>value+1)}>Try again</button></div></section> : actor && <>
       {client ? projectId ? <ProjectPage actor={actor} client={client} projectId={projectId} api={api} setClient={setClient}/> : <ClientView key={client.id} actor={actor} client={client} api={api} setClient={setClient} checkoutOnly={checkoutOnly} paymentReturn={paymentReturn} /> : <>
+        {actor.staff && <StaffProjects clients={clients} email={actor.email} api={api}/>}
         <section className="section stack">
           <div className="row">
             <h1>{actor.staff ? 'Clients' : 'Your accounts'}</h1>
             {actor.staff && <button type="button" className="plain-button" aria-expanded={showNewClient} aria-controls="new-client-section" onClick={()=>setShowNewClient(value=>!value)}>Add new client</button>}
           </div>
-          <p className="muted">{actor.staff ? 'Manage prepaid balances and track work across channels.' : clients.length ? 'Choose your client account.' : 'Your email is not assigned to a client account yet. Contact Windward to arrange access.'}</p>
-          {clients.length > 0 && <div className="table-scroll"><table aria-label="Client accounts"><thead><tr><th>Client</th><th>Credits available</th><th>Credits owed</th><th>Active tasks</th></tr></thead><tbody>{clients.map(item=><tr key={item.id}><td><a href={clientUrl(item.id)}>{item.name}</a></td><td>{Math.max(0,item.balance)}</td><td>{creditsOwed(item)}</td><td>{item.active_tasks}</td></tr>)}</tbody></table></div>}
+          <p className="muted">{actor.staff ? 'Open a client to manage projects, billing, and access.' : clients.length ? 'Choose your client account.' : 'Your email is not assigned to a client account yet. Contact Windward to arrange access.'}</p>
+          {actor.staff ? <><div className="portal-client-list">{clients.map(item=><a key={item.id} href={clientUrl(item.id)}>{item.name}<span className="caption muted">{item.active_tasks} active projects</span></a>)}</div><div><button type="button" className="plain-button" aria-expanded={showAccounts} aria-controls="staff-account-balances" onClick={()=>setShowAccounts(value=>!value)}>{showAccounts ? 'Hide balances' : 'View account balances'}</button></div></> : null}
+          <div id="staff-account-balances" hidden={actor.staff && !showAccounts}>{clients.length > 0 && <div className="table-scroll"><table aria-label="Client accounts"><thead><tr><th>Client</th><th>Credits available</th><th>Credits owed</th><th>Active tasks</th></tr></thead><tbody>{clients.map(item=><tr key={item.id}><td><a href={clientUrl(item.id)}>{item.name}</a></td><td>{Math.max(0,item.balance)}</td><td>{creditsOwed(item)}</td><td>{item.active_tasks}</td></tr>)}</tbody></table></div>}</div>
         </section>
         {actor.staff && <section id="new-client-section" className="section" hidden={!showNewClient}><h2 className="portal-heading">Add client</h2><MutationForm label="Create client" submit={async (form,id)=>{ const created = await api<ClientDetail>('/clients','POST',{id,name:form.get('name'),email:form.get('email')}); window.location.assign(clientUrl(created.id)); }}>
           <div className="fields"><Field label="Client name" name="name" maxLength={160}/><Field label="Client contact email" name="email" type="email" maxLength={254}/></div><p className="caption muted">The contact can sign in and view this account. Share their portal link after creating it.</p>
@@ -89,6 +93,105 @@ function AuthenticatedPortal() {
       </>}
     </>}
   </>;
+}
+
+export function StaffProjects({clients,email,api}:{clients:ClientSummary[];email:string;api:Api}) {
+  const [details,setDetails]=useState<ClientDetail[]>([]);
+  const [loading,setLoading]=useState(true);
+  const [failed,setFailed]=useState<string[]>([]);
+  const [revision,setRevision]=useState(0);
+  useEffect(()=>{
+    let active=true;
+    setLoading(true);
+    void Promise.allSettled(clients.map(item=>api<ClientDetail>(`/clients/${encodeURIComponent(item.id)}`))).then(results=>{
+      if(!active)return;
+      setDetails(current=>{const loaded=results.flatMap(result=>result.status==='fulfilled' ? [result.value] : []);return [...current.filter(client=>!loaded.some(item=>item.id===client.id)),...loaded];});
+      setFailed(results.flatMap((result,index)=>result.status==='rejected' ? [clients[index].name] : []));
+      setLoading(false);
+    });
+    return ()=>{active=false;};
+  },[clients,api,revision]);
+  return <section className="section stack">
+    <div><h1>Log work</h1><p className="muted">What did you work on?</p></div>
+    {loading && <p role="status">Loading projects…</p>}
+    {failed.length>0 && <div><p role="alert">Could not load projects for {failed.join(', ')}.</p><button type="button" className="plain-button" disabled={loading} onClick={()=>setRevision(value=>value+1)}>Retry loading projects</button></div>}
+    <WorkLogForm clients={details} email={email} api={api} onSaved={saved=>setDetails(current=>current.map(item=>item.id===saved.id ? saved : item))}/>
+    {!loading && !details.some(client=>client.tasks.some(canLogHours)) && <p className="caption muted">Open a client below to create a project or manage its time allocation.</p>}
+  </section>;
+}
+
+type StaffProject = {client:ClientDetail;task:Task;recent:number;frequent?:number};
+function ProjectPicker({projects,value,onChange,disabled}:{projects:StaffProject[];value:string;onChange:(id:string)=>void;disabled:boolean}) {
+  const controlId=useId();
+  const [open,setOpen]=useState(false);
+  const [search,setSearch]=useState('');
+  const [highlight,setHighlight]=useState(0);
+  const input=useRef<HTMLInputElement>(null);
+  const selected=projects.find(project=>project.task.id===value);
+  const label=(project:StaffProject)=>`${project.task.title} · ${project.client.name}`;
+  const matches=projects.filter(project=>label(project).toLowerCase().includes(search.toLowerCase().trim()));
+  const choose=(id:string)=>{onChange(id);setOpen(false);setSearch('');input.current?.focus();};
+  const activate=()=>{setSearch('');setHighlight(0);setOpen(true);};
+  return <div className="portal-project-picker" onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))setOpen(false);}}>
+    <label htmlFor={controlId}>Project</label>
+    <div className="portal-project-picker-input"><input ref={input} id={controlId} role="combobox" aria-autocomplete="list" aria-expanded={open} aria-controls={`${controlId}-options`} aria-activedescendant={open && matches[highlight] ? `${controlId}-option-${highlight}` : undefined} disabled={disabled} autoComplete="off" placeholder={selected ? label(selected) : 'Choose or search for a project'} value={open ? search : selected ? label(selected) : ''} onFocus={activate} onClick={()=>{if(!open)activate();}} onChange={event=>{setSearch(event.target.value);setHighlight(0);setOpen(true);}} onKeyDown={event=>{
+      if(event.key==='Escape'){event.preventDefault();setOpen(false);}
+      else if(event.key==='ArrowDown' || event.key==='ArrowUp'){event.preventDefault();if(!open)activate();else setHighlight(current=>Math.max(0,Math.min(matches.length-1,current+(event.key==='ArrowDown' ? 1 : -1))));}
+      else if(event.key==='Enter' && open){event.preventDefault();if(matches[highlight])choose(matches[highlight].task.id);}
+    }}/><button type="button" className="portal-picker-toggle" aria-label="Choose project" aria-expanded={open} disabled={disabled} onClick={()=>{if(open)setOpen(false);else{input.current?.focus();activate();}}}>⌄</button></div>
+    {open && <div className="portal-project-options"><ul id={`${controlId}-options`} role="listbox" aria-label="Projects">{matches.map((project,index)=><li key={project.task.id} id={`${controlId}-option-${index}`} role="option" aria-selected={value===project.task.id} className={highlight===index ? 'portal-option-highlight' : undefined} onMouseDown={event=>event.preventDefault()} onMouseMove={()=>setHighlight(index)} onClick={()=>choose(project.task.id)}><span>{project.task.title}</span><span className="caption muted">{project.client.name}{project.recent ? ' · Recent' : ''}{project.task.status==='completed' ? ' · Completed' : ''}</span></li>)}</ul>{!matches.length && <p className="caption muted">No matching projects.</p>}</div>}
+  </div>;
+}
+
+function WorkLogForm({clients,email,api,onSaved,initialProjectId=''}:{clients:ClientDetail[];email:string;api:Api;onSaved:(client:ClientDetail)=>void;initialProjectId?:string}) {
+  const projects=staffProjects(clients,email).filter(({task})=>canLogHours(task));
+  const [projectId,setProjectId]=useState(initialProjectId);
+  const selected=projects.find(project=>project.task.id===projectId) || (!projectId ? projects.find(project=>project.recent>0) : undefined);
+  const [hours,setHours]=useState('');
+  const [note,setNote]=useState('');
+  const [workDate,setWorkDate]=useState(()=>localDateTime(new Date().toISOString()).slice(0,10));
+  const [showAttachment,setShowAttachment]=useState(false);
+  const [files,setFiles]=useState<PendingFile[]>([]);
+  const [fileError,setFileError]=useState('');
+  const [revision,setRevision]=useState(0);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState('');
+  const [notice,setNotice]=useState('');
+  const pending=useRef<{id:string;clientId:string;task:Task;hours:number;note:string;occurredAt:string;files:PendingFile[]}|null>(null);
+  const saving=useRef(false);
+  const presets=[...new Set([...(selected?.frequent ? [selected.frequent] : []),0.25,0.5,1,2])];
+  const submit=async(event:FormEvent<HTMLFormElement>)=>{
+    event.preventDefault();if(saving.current)return;
+    setError('');setNotice('');
+    if(!selected && !pending.current){setError('Choose a project.');return;}
+    saving.current=true;setBusy(true);
+    try {
+      if(fileError)throw new Error(fileError);
+      const payload=pending.current || {id:crypto.randomUUID(),clientId:selected!.client.id,task:selected!.task,hours:Number(hours),note:note.trim(),occurredAt:new Date(`${workDate}T00:00:00`).toISOString(),files};
+      validateWorkLog(payload);
+      pending.current=payload;
+      const saved=await saveWorkLog({api,...payload}) as ClientDetail;
+      pending.current=null;setNote('');setHours('');setFiles([]);setShowAttachment(false);setRevision(current=>current+1);setWorkDate(localDateTime(new Date().toISOString()).slice(0,10));
+      setNotice(`${payload.hours} ${payload.hours===1 ? 'hour' : 'hours'} logged for ${payload.task.title}.`);
+      onSaved(saved);
+    } catch(error){setError(error instanceof Error ? error.message : 'Unable to save this work.');}
+    finally {saving.current=false;setBusy(false);}
+  };
+  return <form className="stack portal-work-log" onSubmit={event=>void submit(event)}>
+    <fieldset className="portal-fieldset stack" disabled={busy || !!pending.current}>
+      <label className="portal-work-summary">Work summary <span className="caption muted">(this is visible to the client)</span><textarea required maxLength={2000} rows={6} value={note} onChange={event=>setNote(event.target.value)} placeholder="Describe what you worked on…"/></label>
+      <div><button type="button" className="portal-update-action" aria-expanded={showAttachment} onClick={()=>setShowAttachment(value=>!value)}>{showAttachment ? 'Hide attachment picker' : '+ Add attachment'}</button></div>
+      <div hidden={!showAttachment}><AttachmentPicker key={revision} helpId="work-log-attachments-help" filesChanged={setFiles} errorChanged={setFileError}/></div>
+      {fileError && <p role="alert">{fileError}</p>}
+      {files.length>0 && !showAttachment && <p className="caption muted">{files.length} {files.length===1 ? 'attachment' : 'attachments'} selected</p>}
+      <ProjectPicker projects={projects} value={selected?.task.id || ''} disabled={busy || !!pending.current} onChange={setProjectId}/>
+      <div className="portal-work-time"><div><label>Time worked<input type="number" required min={0.25} max={2500} step={0.25} value={hours} onChange={event=>setHours(event.target.value)} placeholder="Hours"/></label><div className="portal-hour-presets" role="group" aria-label="Time increments">{presets.map(value=><button key={value} type="button" className="plain-button" aria-pressed={hours===String(value)} onClick={()=>setHours(String(value))}>{value<1 ? `${value*60} min` : `${value}h`}{value===selected?.frequent && <span className="caption"> · usual</span>}</button>)}</div></div><label>Work date<input type="date" required value={workDate} max={localDateTime(new Date().toISOString()).slice(0,10)} onChange={event=>setWorkDate(event.target.value)}/></label></div>
+
+    </fieldset>
+    {error && <p role="alert">{error}{pending.current ? ' Retry with the same details to finish saving without duplicating hours or attachments.' : ''}</p>}
+    <div><button type="submit" className="action" disabled={busy || (!projects.length && !pending.current)}>{busy ? 'Saving…' : pending.current ? 'Retry saving work' : 'Log work'}</button></div>
+    {notice && <p className="caption portal-edit-success" role="status">{notice}</p>}
+  </form>;
 }
 
 function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
@@ -116,6 +219,7 @@ function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
 
 function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{actor:Actor; client:ClientDetail; api:Api; setClient:(client:ClientDetail)=>void; checkoutOnly:boolean; paymentReturn:boolean}) {
   const checkout = checkoutOnly;
+  const [showBilling,setShowBilling]=useState(false);
   const [copyStatus,setCopyStatus] = useState('');
   const creditActionTarget = document.getElementById('service-credit-action');
   const [showWorkForm,setShowWorkForm] = useState(false);
@@ -137,8 +241,8 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
   const mutate = async (resource:string,method:string,body:unknown) => setClient(await api<ClientDetail>(`/clients/${client.id}/${resource}`,method,body));
   const portalLink = `${window.location.origin}/service/?client=${encodeURIComponent(client.id)}`;
   return <>
-    {creditActionTarget && !checkoutOnly && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,creditActionTarget)}
-    {actor.staff && !checkoutOnly && <div className="portal-back"><a href="/service/">&lt; All clients</a></div>}
+    {creditActionTarget && !actor.staff && !checkoutOnly && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,creditActionTarget)}
+    {actor.staff && !checkoutOnly && <div className="portal-back"><a href="/service/">&lt; Team projects</a></div>}
     {checkoutOnly && <div className="portal-back"><a href={clientUrl(client.id)}>&lt; Back to account</a></div>}
     <section className="section stack" hidden={checkoutOnly}>
       <div className="row portal-client-header">
@@ -150,7 +254,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
             </button>}
           </div>
         </div>
-        <div className="portal-balance">
+        <div className="portal-balance" hidden={actor.staff && !showBilling}>
           {(client.balance>0 || !creditsOwed(client)) && <div><strong>{Math.max(0,client.balance)}</strong><span> credits available</span></div>}
           {creditsOwed(client)>0 && <><div><strong>{creditsOwed(client)}</strong><span> credits owed</span></div><p className="caption muted">{formatPrice(creditsOwed(client)*creditPriceCents)} outstanding · $75 per credit</p><p className="caption muted">{Math.max(0,-client.balance)} unbilled · {client.invoiced_credits || 0} on unpaid invoices</p></>}
         </div>
@@ -160,6 +264,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
     {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
+      {actor.staff && <section className="section stack"><h2>Log work</h2><WorkLogForm clients={[client]} email={actor.email} api={api} onSaved={setClient}/></section>}
       <section id="active-projects" className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="record-work-form" onClick={()=>{setWorkSuccess(null);setShowWorkForm(true);}}>New Project</button>}</div></div>
       {workSuccess && <ProjectCreatedToast success={workSuccess} onDismiss={()=>setWorkSuccess(null)}/>}
       {actor.staff && <ProjectDialog open={showWorkForm} busy={workSaving} onClose={()=>setShowWorkForm(false)}><MutationForm key={workFormRevision} onBusyChange={setWorkSaving} label="Submit" submit={async(form,id)=>{
@@ -196,9 +301,11 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         <div className="fields"><Field label="Requested by" name="requestedBy" maxLength={254}/><label>Source channel<select name="source"><option value="email">Email</option><option value="text">Text</option><option value="call">Call</option><option value="meeting">Meeting</option><option value="other">Other</option></select></label></div>
         {validWorkCredits && workCredits>Math.max(0,client.balance) && <p className="portal-overage-note" role="status">{workCredits-Math.max(0,client.balance)} credits will be owed and billed after month-end.</p>}
       </MutationForm></ProjectDialog>}
-        {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div>}
+        {!activeProjects.length ? <div className="portal-empty-state"><h3>No active projects</h3><p className="muted">{actor.staff ? 'Start a new project to record work and track its progress.' : 'The team will add your next project here. You’ll be able to follow its progress and updates.'}</p></div> : <div className="portal-tasks">{activeProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id} staff={actor.staff}/>)}</div>}
       </section>
-      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Completed Projects</h2>{completedProjects.length ? <div className="portal-tasks">{completedProjects.map(task=><ProjectLink key={task.id} task={task} clientId={client.id} staff={actor.staff}/>)}</div> : <p className="muted">No completed projects yet.</p>}</section>
+      {actor.staff && <div className="section"><button type="button" className="plain-button" aria-expanded={showBilling} aria-controls="client-billing-details" onClick={()=>setShowBilling(value=>!value)}>{showBilling ? 'Hide billing and access' : 'Manage billing and access'}</button></div>}
+      <div id="client-billing-details" hidden={actor.staff && !showBilling}>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
       <section className="section"><h2 className="portal-heading">Credit activity</h2>{activity.length ? <div className="table-scroll"><table className="portal-credit-table" aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date (UTC)</th><th>Activity</th><th>Credits</th><th><span className="portal-pack-legend">Invoice</span></th></tr></thead><tbody>{activity.map(entry=><tr key={entry.id}><td><time dateTime={entry.occurred_at || entry.created_at}>{new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(entry.occurred_at || entry.created_at))}</time></td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : entry.allocation ? 'Work allocated' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td><td>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
@@ -208,6 +315,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
         </MutationForm></section>}
         <section className="section"><h2 className="portal-heading">Client access</h2><ul className="portal-members">{client.members.map(email=><li key={email}><span>{email}</span><MutationForm label="Remove access" reset={false} submit={async()=>mutate('members','DELETE',{email})}/></li>)}</ul><MutationForm label="Allow email" submit={async(form)=>mutate('members','POST',{email:form.get('email')})}><Field label="Client email" name="email" type="email" maxLength={254}/><p className="caption muted">Share the client link yourself. No invitation email is sent.</p></MutationForm></section>
       </>}
+      </div>
     </>}
   </>;
 }
@@ -338,8 +446,8 @@ function AttachmentPicker({helpId,filesChanged,errorChanged}:{helpId:string;file
   }}/></label><p id={helpId} className="caption muted">Up to 5 files, 10 MB each. Visible to this client’s approved emails and Windward staff.</p></>;
 }
 
-function TaskStatus({task,showStatus=true}:{task:Task;showStatus?:boolean}) {
-  return <span className="caption portal-task-meta">{showStatus && <span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span>}<span className="muted">{task.pricing_model==='fixed' ? 'Fixed price' : 'Hourly'} · {task.credits}{task.pricing_model==='fixed' ? ` / ${task.fixed_credits}` : ''} credits{task.status==='cancelled' ? ' returned' : ' charged'}</span></span>;
+function TaskStatus({task,showStatus=true,showPricing=true}:{task:Task;showStatus?:boolean;showPricing?:boolean}) {
+  return <span className="caption portal-task-meta">{showStatus && <span className={task.status==='completed' ? 'portal-success' : 'portal-status-neutral'}>{task.status==='completed' && <span aria-hidden="true">✓ </span>}{statusNames[task.status]}</span>}{showPricing && <span className="muted">{task.pricing_model==='fixed' ? 'Fixed price' : 'Hourly'} · {task.credits}{task.pricing_model==='fixed' ? ` / ${task.fixed_credits}` : ''} credits{task.status==='cancelled' ? ' returned' : ' charged'}</span>}</span>;
 }
 function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:number;balance:number};onDismiss:()=>void}) {
   const [hovered,setHovered]=useState(false);
@@ -358,13 +466,13 @@ function ProjectCreatedToast({success,onDismiss}:{success:{id:string;credits:num
     <button type="button" className="portal-toast-dismiss" aria-label="Dismiss notification" onClick={onDismiss}>×</button>
   </div>,document.body);
 }
-function ProjectLink({task,clientId}:{task:Task;clientId:string}) {
-  return <a className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task} showStatus={task.status==='completed' || task.status==='cancelled'}/><span aria-hidden="true">›</span></span></a>;
+function ProjectLink({task,clientId,staff=false}:{task:Task;clientId:string;staff?:boolean}) {
+  return <a className="portal-project-link" href={`/service/project/?client=${encodeURIComponent(clientId)}&project=${encodeURIComponent(task.id)}`}><span>{task.title}</span><span className="portal-task-meta"><TaskStatus task={task} showPricing={!staff} showStatus={staff || task.status==='completed' || task.status==='cancelled'}/><span aria-hidden="true">›</span></span></a>;
 }
 function ProjectPage({actor,client,projectId,api,setClient}:{actor:Actor;client:ClientDetail;projectId:string;api:Api;setClient:(client:ClientDetail)=>void}) {
   const task=client.tasks.find(task=>task.id===projectId);
   const target=document.getElementById('service-credit-action');
-  return <>{target && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
+  return <>{target && !actor.staff && createPortal(<a className="action" href={`/service/checkout/?client=${encodeURIComponent(client.id)}`}>Add credits</a>,target)}<div className="portal-back"><a href={clientUrl(client.id)}>&lt; All projects</a></div>{task ? <TaskView key={task.id} task={task} client={client} staff={actor.staff} api={api} setClient={setClient}/> : <section className="section stack"><h1>Project unavailable</h1><p>This project could not be found in your account.</p></section>}</>;
 }
 
 function ProjectAgreement({task,client,staff,api,setClient,onBusyChange}:{task:Task;client:ClientDetail;staff:boolean;api:Api;setClient:(client:ClientDetail)=>void;onBusyChange:(busy:boolean)=>void}) {
@@ -451,7 +559,7 @@ function TaskView({task,client,staff,api,setClient}:{task:Task; client:ClientDet
       <p className="caption muted">Cancelling returns {task.credits} credits and closes this work record.</p>
     </MutationForm>}
   </div>;
-  return <section className="section stack portal-project-page"><div className="row"><div><h1>{task.title}</h1><p className="caption muted">{client.name}</p></div><div className="portal-actions"><TaskStatus task={task}/>{staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="edit-project-details" onClick={()=>{setProjectNotice('');setEditing(task);}}>Edit details</button>}</div></div>
+  return <section className="section stack portal-project-page"><div className="row"><div><h1>{task.title}</h1><p className="caption muted">{client.name}</p></div><div className="portal-actions"><TaskStatus task={task} showPricing={!staff}/>{staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="edit-project-details" onClick={()=>{setProjectNotice('');setEditing(task);}}>Edit details</button>}</div></div>
     {projectNotice && <p className="caption portal-edit-success" role="status">{projectNotice}</p>}
     {staff && <ProjectDialog id="edit-work-entry" title="Edit work entry" open={!!entryEditing} busy={dateSaving} onClose={()=>setEntryEditing(null)}>{entryEditing && <MutationForm label="Save changes" reset={false} onBusyChange={setDateSaving} submit={async(form,id)=>{
       const chosen=String(form.get('occurredAt')),original=entryEditing.occurred_at;
