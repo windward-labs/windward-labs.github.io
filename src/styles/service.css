@@ -319,3 +319,23 @@ body:has(.portal-project-dialog[open]) { overflow: hidden; }
 .workspace .portal-client-list a { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; text-decoration: none; }
 .workspace .portal-client-list a:hover { text-decoration: underline; }
 @media (max-width: 640px) { .portal-work-time { grid-template-columns: minmax(0, 1fr); } }
+
+.portal-time-activity { padding: 20px; border: 1px solid #dedede; border-radius: 8px; }
+.portal-time-activity h3, .portal-time-activity h4 { margin: 0; font-size: 16px; }
+.portal-time-layout { display: grid; grid-template-columns: minmax(240px, 320px) minmax(0, 1fr); gap: 32px; }
+.portal-time-month { text-align: center; }
+.portal-time-calendar { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; text-align: center; }
+.workspace .portal-time-day { min-width: 0; min-height: 36px; padding: 6px 0; border: 1px solid #dedede; border-radius: 4px; background: #f5f5f5; color: #171717; font-size: 12px; }
+.workspace .portal-time-day[data-level="1"] { background: #dcfce7; }
+.workspace .portal-time-day[data-level="2"] { background: #86efac; }
+.workspace .portal-time-day[data-level="3"] { background: #22c55e; }
+.workspace .portal-time-day[data-level="4"] { background: #166534; color: #fff; }
+.workspace .portal-time-day[aria-current="date"] { font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.workspace .portal-time-day[aria-pressed="true"] { outline: 2px solid #171717; outline-offset: 1px; }
+.workspace .portal-time-day:disabled { opacity: .35; cursor: default; }
+.portal-time-entries { list-style: none; padding: 0; margin: 0; max-height: 320px; overflow-y: auto; }
+.portal-time-entries li { padding: 12px 0; border-bottom: 1px solid #dedede; overflow-wrap: anywhere; }
+.portal-time-entries li:first-child { padding-top: 0; }
+.portal-time-entries .row { align-items: baseline; }
+.portal-time-entries .row strong { white-space: nowrap; }
+@media (max-width: 640px) { .portal-time-layout { grid-template-columns: minmax(0, 1fr); gap: 24px; } .portal-time-activity { padding: 16px; } }

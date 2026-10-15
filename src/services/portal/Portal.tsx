@@ -5,6 +5,7 @@ import { creditPacks, creditPriceCents, formatPrice, normalCreditsPerHour } from
 import { checkoutLink, isLocalApi } from '../stripe-checkout.mjs';
 import { creditActivity } from './credit-activity.mjs';
 import { saveProgress } from './save-progress.mjs';
+import { TimeActivity } from './TimeActivity';
 import { canLogHours, saveWorkLog, validateWorkLog, staffProjects } from './log-hours.mjs';
 import type { Actor, ClientSummary, ClientDetail, Task, WorkStatus, Attachment, BillingInvoice, WorkEntry } from './types';
 
@@ -177,7 +178,7 @@ function WorkLogForm({clients,email,api,onSaved,initialProjectId=''}:{clients:Cl
     } catch(error){setError(error instanceof Error ? error.message : 'Unable to save this work.');}
     finally {saving.current=false;setBusy(false);}
   };
-  return <form className="stack portal-work-log" onSubmit={event=>void submit(event)}>
+  return <><TimeActivity clients={clients} email={email}/><form className="stack portal-work-log" onSubmit={event=>void submit(event)}>
     <fieldset className="portal-fieldset stack" disabled={busy || !!pending.current}>
       <label className="portal-work-summary">Work summary <span className="caption muted">(this is visible to the client)</span><textarea required maxLength={2000} rows={6} value={note} onChange={event=>setNote(event.target.value)} placeholder="Describe what you worked on…"/></label>
       <div><button type="button" className="portal-update-action" aria-expanded={showAttachment} onClick={()=>setShowAttachment(value=>!value)}>{showAttachment ? 'Hide attachment picker' : '+ Add attachment'}</button></div>
@@ -191,7 +192,7 @@ function WorkLogForm({clients,email,api,onSaved,initialProjectId=''}:{clients:Cl
     {error && <p role="alert">{error}{pending.current ? ' Retry with the same details to finish saving without duplicating hours or attachments.' : ''}</p>}
     <div><button type="submit" className="action" disabled={busy || (!projects.length && !pending.current)}>{busy ? 'Saving…' : pending.current ? 'Retry saving work' : 'Log work'}</button></div>
     {notice && <p className="caption portal-edit-success" role="status">{notice}</p>}
-  </form>;
+  </form></>;
 }
 
 function AccountMenu({email,onSignOut}:{email:string;onSignOut:()=>void}) {
