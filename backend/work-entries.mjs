@@ -22,7 +22,7 @@ async function project(db,clientId,taskId) {
   return task;
 }
 export async function workEntries(db,actor,clientId,taskId=null) {
-  const fields='e.id,e.task_id,e.occurred_at,e.hours,e.credits,e.note,e.kind,e.version,e.created_at,e.actor_email';
+  const fields='e.id,e.task_id,e.occurred_at,e.hours,e.credits,e.note,e.kind,e.version,e.created_at,e.actor_email,COALESCE((SELECT MAX(r.revision) FROM attribution_revisions r WHERE r.entry_id=e.id),0) AS attribution_revision';
   const result=await query(db,`SELECT ${fields}${actor.staff ? ',e.source_type,e.source_id,e.reallocation_id' : ''} FROM work_entries e JOIN tasks t ON t.id=e.task_id WHERE t.client_id=? ${taskId ? 'AND t.id=?' : ''} ORDER BY e.occurred_at,e.id`,clientId,...(taskId ? [taskId] : [])).all();
   return result.results;
 }

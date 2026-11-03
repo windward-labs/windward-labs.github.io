@@ -24,7 +24,8 @@ export function authorizeAgent(actor,path,method) {
   if(actor.scopes?.includes('admin'))return;
   if(path==='/v1/me' && method==='GET')return;
   let scope;
-  if(method==='GET' && /^\/v1\/clients(?:\/[^/]+)?$/.test(path))scope='clients:read';
+  if(/^\/v1\/clients\/[^/]+\/project-attribution(?:\/(?:history|preview))?$/.test(path))scope=method==='GET' && path.endsWith('/project-attribution') ? 'clients:read' : 'admin';
+  else if(method==='GET' && /^\/v1\/clients(?:\/[^/]+)?$/.test(path))scope='clients:read';
   else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/(charges|time-entries|agreement)$/.test(path))scope=method==='GET' ? 'clients:read' : method==='PATCH' && path.endsWith('/agreement') ? 'billing:agreement' : method==='POST' && !path.endsWith('/agreement') ? 'billing:work' : null;
   else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/work-entries(?:\/[^/]+)?$/.test(path))scope=method==='GET' && path.endsWith('/work-entries') ? 'clients:read' : method==='POST' && path.endsWith('/work-entries') ? 'billing:work' : method==='PATCH' || (method==='POST' && path.endsWith('/reallocate')) ? 'billing:dates' : null;
   else if(/^\/v1\/clients\/[^/]+\/tasks\/[^/]+\/attachments\/[^/]+$/.test(path))scope=method==='GET'?'clients:read':method==='POST'?'attachments:write':null;

@@ -1,3 +1,4 @@
+import {adjustProjectAttribution,projectAttribution,attributionHistory,previewProjectAttribution} from './project-attribution.mjs';
 import {agreementRecords,recordAgreementWork,changeAgreement} from './project-agreements.mjs';
 import { PortalError, requireStaff, normalizeEmail, text, id, workInput, statusInput,eventTimestamp,workTimestamp } from './domain.mjs';
 import { fulfillCheckout } from './stripe.mjs';
@@ -36,7 +37,7 @@ async function detail(db, actor, clientId) {
     query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
     query(db,'SELECT d.* FROM project_date_changes d JOIN tasks t ON t.id=d.task_id WHERE t.client_id=? AND ?=1 ORDER BY d.created_at,d.id',clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0],...await agreementRecords(db,actor,clientId), members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
+  return { ...client,...balances.results[0],...await agreementRecords(db,actor,clientId),...await projectAttribution(db,clientId), members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
 }
 
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
@@ -118,6 +119,17 @@ async function handleAuthorizedApi(request, env, authenticate) {
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
       return json(await detail(db,actor,clientId),201);
+    }
+    const attributionRoute=path.match(/^\/v1\/clients\/([^/]+)\/project-attribution(?:\/(history|preview))?$/);
+    if(attributionRoute) {
+      const clientId=id(attributionRoute[1]);
+      await clientAccess(db,actor,clientId);
+      if(method==='GET' && attributionRoute[2]==='history')return json({history:await attributionHistory(db,actor,clientId)});
+      if(method==='GET' && !attributionRoute[2])return json(await projectAttribution(db,clientId));
+      requireStaff(actor);requireAgentScope(actor,'admin');
+      if(method==='POST' && attributionRoute[2]==='preview')return json(await previewProjectAttribution(db,actor,clientId,await bodyOf(request,300000)));
+      if(method!=='POST' || attributionRoute[2])throw new PortalError(405,'Method not allowed.');
+      return json(await adjustProjectAttribution(db,actor,clientId,await bodyOf(request,300000)));
     }
     const agreementRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/(charges|time-entries|agreement)$/);
     if(agreementRoute) {
@@ -311,6 +323,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
     return json(await detail(db,actor,clientId));
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
+    if (/Attribution conflict:/i.test(String(error)))return json({error:'Attribution conflict: refresh entry versions, allocations and projects before retrying.'},409);
     if (/Work date is covered by an issued invoice/i.test(String(error))) return json({error:'An issued invoice covers this work date. Resolve that invoice before changing its billing attribution.'},409);
     if (/Work entry is covered by an issued invoice|Cancelled projects cannot record work|Allocation exceeds original charge|Reallocate the original project charge first|Work entry charge is immutable|Fixed-price|Approved hourly budget|Internal time entries|Invalid project agreement|Agreement changes require approval/i.test(String(error)))return json({error:String(error).replace(/^.*?(Work entry is covered|Cancelled projects|Allocation exceeds|Reallocate the original|Work entry charge|Fixed-price|Approved hourly budget|Internal time entries|Invalid project agreement|Agreement changes require approval)/,'$1')},409);
     if (/UNIQUE constraint failed: invoices.client_id, invoices.period/i.test(String(error))) return json({error:'This month already has an invoice. Open the existing bill before creating another.'},409);

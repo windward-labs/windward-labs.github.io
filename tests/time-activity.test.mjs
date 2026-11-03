@@ -38,3 +38,11 @@ test('calendar aligns weekdays, handles leap years and navigates across years',(
   assert.equal(shiftMonth('2026-01',-1),'2025-12');
   assert.equal(shiftMonth('2026-12',1),'2027-01');
 });
+test('time reports use corrected project allocations once and retain source IDs',()=>{
+  const source=entry('historical',{hours:15});
+  const clients=[{id:'a',name:'Acme',tasks:[{id:'task',title:'Site Updates'},{id:'invite',title:'Invite'}],workEntries:[source],projectWorkEntries:[{...source,hours:5},{...source,task_id:'invite',hours:10}],timeEntries:[]}];
+  const rows=timeActivity(clients,email);
+  assert.equal(rows.length,2);assert.equal(rows.reduce((sum,r)=>sum+r.hours,0),15);
+  assert.deepEqual(rows.map(r=>r.taskTitle).sort(),['Invite','Site Updates']);
+  assert.ok(rows.every(r=>r.id==='historical'));
+});

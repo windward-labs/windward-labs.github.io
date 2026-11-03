@@ -433,3 +433,56 @@ For a restricted integration, supported scopes are `clients:read`,
 `projects:create`, `projects:update`, `projects:moderate`, `projects:cancel`, `attachments:write`,
 `billing:read`, `billing:work`, `billing:dates`, `billing:agreement`, `billing:draft`, `billing:issue`, `billing:void`. Cancellation
 requires both update and cancel; `admin` includes every existing staff API route.
+
+## Correct historical project attribution without changing billing
+
+Apply migration `0012_project_attribution.sql` before deploying this API version.
+This operation applies only to **existing work entries**, including entries in
+issuing/open/paid invoice periods. It does not bypass date/note locks, convert
+legacy task charges, change agreements, or create billable work. Human staff
+have admin authority in the current model; agent keys must have `admin`.
+
+- `GET /clients/{client}/project-attribution`: corrected `projectWorkEntries` and
+  active-source `projectAttributionTotals`; normal client read permissions.
+- `POST /clients/{client}/project-attribution/preview`: admin-only read-only plan.
+- `POST /clients/{client}/project-attribution`: admin-only atomic correction.
+- `GET /clients/{client}/project-attribution/history`: admin-only immutable audit.
+
+POST bodies contain exactly `id` (unique UUID idempotency key), `reason`, and
+`entries` (1–100). Each entry contains exactly `entryId`, `expectedVersion`
+(original work-entry version), `expectedRevision` (current attribution revision),
+and `allocations` (1–100 complete allocations, each containing exactly `taskId`,
+`hours`, `credits`). Use observed UUIDs, never example identifiers. Each target
+must be an existing non-cancelled project belonging to the original client.
+A project may occur only once per source entry. Positive quarter-hour / whole
+credit allocations must total exactly the source hours and credits at 4:1.
+Extra fields, including financial changes, are rejected. A request that already
+matches current attribution is rejected rather than recording another adjustment.
+
+Unchanged exact retries by the same actor succeed with the same `adjustmentId`;
+changed bodies or actors reusing a key return 409. Keep the request and key when
+a response is lost. Stale versions/revisions and invalid allocations return 409;
+one bad entry rolls back the entire adjustment. Concurrent corrections of the
+same revision cannot both succeed. Preview is read-only and does not reserve
+state. Review a fresh plan after a conflict instead of silently updating versions.
+
+Client details retain original `workEntries` and financial `tasks[].credits`,
+and additionally expose `projectWorkEntries` and `projectAttributionTotals`.
+Projected rows retain original `id`, dates, notes and author, with allocated
+`task_id`, `hours`, `credits`, `original_task_id`, and `attribution_revision`.
+A split repeats the source ID across projects; use `(id,task_id)` as a display
+key. `GET .../work-entries` remains the original source view and includes
+`attribution_revision` for admin concurrency checks. Sources stay staff-only.
+Project timelines and staff time reports consume the projected rows. Cancelled
+source projects are excluded from project attribution totals, following billing's
+active-work convention. Fixed-price charges and private time are unaffected.
+
+Invoice documents, billable work, credit activity, charged project totals,
+refund semantics, and ledger history continue to use original records. Never
+feed projected rows into billing or `creditActivity`. Audit history records
+actor, timestamp, reason, key, entry IDs, work versions, attribution revisions,
+and complete original/revised project allocations; UPDATE/DELETE are blocked.
+Use a new audited revision to correct a prior adjustment.
+
+See [historical correction review](reviews/historical-project-attribution.md)
+for the pending July/September plan and offline read-only preview command.

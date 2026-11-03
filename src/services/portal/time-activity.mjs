@@ -7,7 +7,7 @@ export function workDay(value) {
 
 /** @param {import('./types').ClientDetail[]} clients @param {string} email */
 export function timeActivity(clients, email) {
-  return clients.flatMap(client => [...(client.workEntries || []), ...(client.timeEntries || [])].flatMap(entry => {
+  return clients.flatMap(client => [...(client.projectWorkEntries ?? client.workEntries ?? []), ...(client.timeEntries || [])].flatMap(entry => {
     if (entry.actor_email !== email || !(entry.hours > 0)) return [];
     const day = workDay(entry.occurred_at);
     if (!day) return [];

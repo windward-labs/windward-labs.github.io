@@ -293,3 +293,17 @@ origin settings.
 References: [Privy React setup](https://docs.privy.io/basics/react/setup),
 [Privy access tokens](https://docs.privy.io/authentication/user-authentication/access-tokens),
 [Cloudflare D1 transactions](https://developers.cloudflare.com/d1/worker-api/d1-database/#batch).
+
+## Historical project attribution
+
+Migration `0012_project_attribution.sql` adds an append-only reporting overlay
+for existing work entries. Admins can split or reassign project attribution,
+including billed entries, without changing work, ledger, invoices, payments or
+balances. Project timelines and staff time reports use the corrected allocation;
+credit activity and financial records retain original attribution. Deploy the
+migration before the Worker. No historical corrections are seeded by it.
+
+The [API guide](AGENT_API.md#correct-historical-project-attribution-without-changing-billing)
+documents permissions, preview, complete allocations, revisions and idempotency.
+The [review plan](reviews/historical-project-attribution.md) documents available
+evidence, missing historical records and the offline read-only preview workflow.

@@ -36,6 +36,7 @@ function fixture(extraEnv = {}) {
   sqlite.exec(readFileSync(new URL('../backend/migrations/0010_work_entries.sql',import.meta.url),'utf8'));
   sqlite.exec('COMMIT');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0011_project_agreements.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0012_project_attribution.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -1026,4 +1027,129 @@ test('192-credit Embedded Design and 64-credit Collaborative Project purchases f
     if(credits===192)assert.equal((await f.fund(clientId,'pi_verified192',192)).status,200);
     f.sqlite.close();
   }
+});
+
+// These records are synthetic, not the historical Ribbit source records.
+async function attributionFixture(status=null) {
+  const f=fixture(),clientId=await f.client(),tasks=[];
+  for(const title of ['Site Updates','Annual Meeting Invite','Career Tab']) {
+    const task={...f.work(0),title};
+    assert.equal((await f.call(staff,`/clients/${clientId}/tasks`,'POST',task)).status,200);tasks.push(task);
+  }
+  const entries=[datedEntry(60,'2025-07'),datedEntry(2,'2025-07'),datedEntry(29,'2025-09')];
+  for(const entry of entries)assert.equal((await f.call(staff,`/clients/${clientId}/tasks/${tasks[0].id}/work-entries`,'POST',entry)).status,200);
+  if(status) {
+    for(const [period,credits] of [['2025-07',62],['2025-09',29]]) {
+      const invoiceId=crypto.randomUUID();
+      f.sqlite.prepare(`INSERT INTO invoices(id,client_id,period,cutoff,email,credits,amount_cents,stripe_mode,created_by,actor_email,attribution_mode) VALUES(?,?,?,?,?,?,?,'test',?,?,'monthly')`).run(invoiceId,clientId,period,period==='2025-07' ? '2025-08-01T00:00:00.000Z' : '2025-10-01T00:00:00.000Z',contact.email,credits,credits*7500,staff.id,staff.email);
+      f.sqlite.prepare("UPDATE invoices SET status='issuing' WHERE id=?").run(invoiceId);
+      if(status!=='issuing')f.sqlite.prepare('UPDATE invoices SET status=? WHERE id=?').run(status,invoiceId);
+    }
+  }
+  const path=`/clients/${clientId}/project-attribution`;
+  const request={id:crypto.randomUUID(),reason:'Correct project attribution after review; retain financial history.',entries:[
+    {entryId:entries[0].id,expectedRevision:0,expectedVersion:0,allocations:[{taskId:tasks[0].id,hours:5,credits:20},{taskId:tasks[1].id,hours:10,credits:40}]},
+    {entryId:entries[2].id,expectedRevision:0,expectedVersion:0,allocations:[{taskId:tasks[2].id,hours:7.25,credits:29}]},
+  ]};
+  const snapshot=()=>Object.fromEntries(['clients','tasks','work_entries','ledger','invoices','billable_work','project_charges','time_entries'].map(table=>[table,f.sqlite.prepare(`SELECT * FROM ${table} ORDER BY id`).all()]));
+  return {...f,clientId,tasks,entries,path,request,snapshot};
+}
+for(const status of [null,'issuing','open','paid'])test(`project attribution splits and moves work in ${status || 'unlocked'} periods without any financial changes`,async()=>{
+  const f=await attributionFixture(status),before=f.snapshot();
+  const previews=await Promise.all(['2025-07','2025-09'].map(period=>billingPreview(f.DB,f.clientId,period)));
+  const result=await f.call(staff,f.path,'POST',f.request);assert.equal(result.status,200,JSON.stringify(result.data));
+  assert.deepEqual(f.snapshot(),before);
+  assert.deepEqual(await Promise.all(['2025-07','2025-09'].map(period=>billingPreview(f.DB,f.clientId,period))),previews);
+  const detail=(await f.call(contact,`/clients/${f.clientId}`)).data;
+  const totals=new Map(detail.projectAttributionTotals.map(t=>[t.task_id,[t.hours,t.credits]]));
+  assert.deepEqual(totals.get(f.tasks[0].id),[5.5,22]);assert.deepEqual(totals.get(f.tasks[1].id),[10,40]);assert.deepEqual(totals.get(f.tasks[2].id),[7.25,29]);
+  assert.equal(detail.projectWorkEntries.length,4);assert.equal(detail.workEntries.length,3);
+  assert.equal(detail.workEntries.find(e=>e.id===f.entries[0].id).hours,15);
+  assert.equal(detail.projectWorkEntries.filter(e=>e.id===f.entries[0].id).length,2);
+  assert.equal(JSON.stringify(detail.projectWorkEntries).includes('source_id'),false);
+  assert.equal((await f.call(contact,f.path+'/history')).status,403);
+  const history=(await f.call(staff,f.path+'/history')).data.history;
+  assert.equal(history.length,2);assert.equal(history[0].actor_email,staff.email);assert.equal(history[0].created_by,staff.id);assert.ok(history[0].created_at);assert.equal(history[0].reason,f.request.reason);
+  const split=history.find(h=>h.entry_id===f.entries[0].id);
+  assert.equal(JSON.parse(split.before_json)[0].credits,60);assert.equal(JSON.parse(split.after_json).reduce((s,a)=>s+a.credits,0),60);
+  for(const table of ['attribution_adjustments','attribution_revisions']) {
+    assert.throws(()=>f.sqlite.exec(`DELETE FROM ${table}`),/immutable/);
+    assert.throws(()=>f.sqlite.exec(`UPDATE ${table} SET ${table==='attribution_adjustments' ? "reason='rewrite'" : 'revision=99'}`),/immutable/);
+  }
+  assert.deepEqual(f.sqlite.prepare('PRAGMA foreign_key_check').all(),[]);
+});
+test('attribution retries are idempotent, conflicting concurrent edits roll back, and history chains revisions',async()=>{
+  const f=await attributionFixture('paid'),before=f.snapshot();
+  const responses=await Promise.all([f.call(staff,f.path,'POST',f.request),f.call(staff,f.path,'POST',f.request)]);
+  assert.deepEqual(responses.map(r=>r.status),[200,200]);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM attribution_adjustments').get().n,1);
+  assert.equal((await f.call(staff,f.path,'POST',{...f.request,reason:'Different reason'})).status,409);
+  assert.equal((await f.call(staff,f.path,'POST',{...f.request,id:crypto.randomUUID()})).status,409);
+  const next={...f.request,id:crypto.randomUUID(),entries:[{...f.request.entries[0],expectedRevision:1,allocations:[{taskId:f.tasks[1].id,hours:15,credits:60}]}]};
+  const competing={...next,id:crypto.randomUUID(),entries:[{...next.entries[0],allocations:[{taskId:f.tasks[2].id,hours:15,credits:60}]}]};
+  const race=await Promise.all([f.call(staff,f.path,'POST',next),f.call(staff,f.path,'POST',competing)]);
+  assert.deepEqual(race.map(r=>r.status).sort(),[200,409]);
+  // Original retry succeeds even after a later correction.
+  assert.equal((await f.call(staff,f.path,'POST',f.request)).status,200);
+  const history=(await f.call(staff,f.path+'/history')).data.history.filter(h=>h.entry_id===f.entries[0].id).sort((a,b)=>a.revision-b.revision);
+  assert.equal(history.length,2);assert.deepEqual(JSON.parse(history[1].before_json),JSON.parse(history[0].after_json));
+  assert.deepEqual(f.snapshot(),before);
+});
+test('attribution rejects permissions, financial changes, bad totals, invalid projects and stale work atomically',async()=>{
+  const f=await attributionFixture(),before=f.snapshot(),limited=await agentKey(f,['clients:read','billing:dates','billing:work']);
+  assert.equal((await f.call(contact,f.path,'POST',f.request)).status,403);
+  assert.equal((await f.call(outsider,f.path)).status,404);
+  assert.equal((await f.call(limited.actor,f.path,'POST',f.request)).status,403);
+  assert.equal((await f.call(limited.actor,f.path+'/history')).status,403);
+  assert.equal((await f.call(limited.actor,f.path)).status,200);
+  const other=await f.client(),otherTask=f.work(0);await f.call(staff,`/clients/${other}/tasks`,'POST',otherTask);
+  const change=(values)=>({...f.request,id:crypto.randomUUID(),entries:[f.request.entries[0],{...f.request.entries[1],...values}]});
+  for(const [body,expected] of [
+    [{...f.request,credits:91},400],
+    [change({allocations:[{taskId:f.tasks[2].id,hours:7,credits:28}]}),409],
+    [change({allocations:[{taskId:f.tasks[2].id,hours:7,credits:29}]}),400],
+    [change({allocations:[{taskId:crypto.randomUUID(),hours:7.25,credits:29}]}),409],
+    [change({allocations:[{taskId:otherTask.id,hours:7.25,credits:29}]}),409],
+    [change({expectedVersion:1}),409],
+    [change({entryId:crypto.randomUUID()}),409],
+    [change({allocations:[{taskId:f.tasks[2].id,hours:7.25,credits:29,note:'overwrite'}]}),400],
+    [change({allocations:[{taskId:f.tasks[0].id,hours:7.25,credits:29}]}),409],
+    [change({allocations:[{taskId:f.tasks[2].id,hours:1,credits:4},{taskId:f.tasks[2].id,hours:6.25,credits:25}]}),400],
+  ]) {
+    const result=await f.call(staff,f.path,'POST',body);assert.equal(result.status,expected,JSON.stringify(result.data));
+    assert.equal(f.sqlite.prepare('SELECT count(*) n FROM attribution_adjustments').get().n,0);
+    assert.equal(f.sqlite.prepare('SELECT count(*) n FROM attribution_revisions').get().n,0);
+  }
+  assert.deepEqual(f.snapshot(),{...before,clients:f.sqlite.prepare('SELECT * FROM clients ORDER BY id').all(),tasks:f.sqlite.prepare('SELECT * FROM tasks ORDER BY id').all()});
+  const admin=await agentKey(f);
+  assert.equal((await f.call(admin.actor,f.path,'POST',f.request)).status,200);
+});
+test('read-only attribution preview reports exact source entries and monthly totals without writing',async()=>{
+  const f=await attributionFixture('paid'),before=f.snapshot();
+  const preview=await f.call(staff,f.path+'/preview','POST',f.request);
+  assert.equal(preview.status,200,JSON.stringify(preview.data));assert.equal(preview.data.dryRun,true);
+  assert.deepEqual(preview.data.affectedEntries.map(r=>r.entry.id).sort(),[f.entries[0].id,f.entries[2].id].sort());
+  assert.equal(preview.data.monthlyProjectTotalsAfter.find(t=>t.taskId===f.tasks[0].id).credits,22);
+  assert.deepEqual(f.snapshot(),before);
+  assert.equal(f.sqlite.prepare('SELECT count(*) n FROM attribution_adjustments').get().n,0);
+  const limited=await agentKey(f,['clients:read']);
+  assert.equal((await f.call(limited.actor,f.path+'/preview','POST',f.request)).status,403);
+  assert.equal((await f.call(contact,f.path+'/preview','POST',f.request)).status,403);
+  assert.equal((await f.call(staff,f.path+'/preview','POST',{...f.request,entries:[{...f.request.entries[0],expectedRevision:8}]})).status,409);
+});
+test('offline preview opens a sanitized snapshot read-only and fully moved sources report zero',async()=>{
+  const {mkdtempSync,readFileSync,rmSync}=await import('node:fs');
+  const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const {previewSnapshot}=await import('../backend/preview-project-attribution.mjs');
+  const f=await attributionFixture('paid'),directory=mkdtempSync(join(tmpdir(),'windward-attribution-')),snapshot=join(directory,'sanitized.sqlite');
+  try {
+    f.sqlite.prepare('VACUUM INTO ?').run(snapshot);
+    const bytes=readFileSync(snapshot),preview=await previewSnapshot(snapshot,f.clientId,f.request);
+    assert.equal(preview.dryRun,true);assert.equal(preview.affectedEntries.length,2);
+    assert.deepEqual(readFileSync(snapshot),bytes);
+    const fullMove={...f.request,entries:f.entries.map(e=>({entryId:e.id,expectedVersion:0,expectedRevision:0,allocations:[{taskId:f.tasks[1].id,hours:e.hours,credits:e.credits}]}))};
+    assert.equal((await f.call(staff,f.path,'POST',fullMove)).status,200);
+    const totals=(await f.call(contact,f.path)).data.projectAttributionTotals;
+    assert.deepEqual(totals.find(t=>t.task_id===f.tasks[0].id),{task_id:f.tasks[0].id,hours:0,credits:0});
+  } finally {rmSync(directory,{recursive:true,force:true});}
 });

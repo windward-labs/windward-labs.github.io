@@ -20,7 +20,7 @@ export async function logHours({ api, clientId, task, id, hours, occurredAt, not
 /** @param {import('./types').ClientDetail[]} clients @param {string} email */
 export function staffProjects(clients, email) {
   return clients.flatMap(client => client.tasks.map(task => {
-    const entries = [...(client.workEntries || []), ...(client.timeEntries || [])]
+    const entries = [...(client.projectWorkEntries ?? client.workEntries ?? []), ...(client.timeEntries || [])]
       .filter(entry => entry.task_id === task.id && entry.actor_email === email);
     const recent = entries.reduce((latest, entry) => Math.max(latest, Date.parse(entry.created_at || entry.occurred_at) || 0), 0);
     const frequencies = new Map();
