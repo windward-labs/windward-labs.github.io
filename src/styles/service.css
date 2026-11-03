@@ -315,8 +315,8 @@ body:has(.portal-project-dialog[open]) { overflow: hidden; }
 .portal-project-options li { display: grid; padding: 8px 12px; cursor: pointer; overflow-wrap: anywhere; }
 .portal-project-options .portal-option-highlight { background: #f0f0f0; }
 .portal-project-options > p { padding: 8px 12px; }
-.portal-client-list { display: grid; gap: 8px; }
-.workspace .portal-client-list a { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 8px 0; text-decoration: none; }
+.portal-client-list { display: grid; border-top: 1px solid var(--color-border); }
+.workspace .portal-client-list a { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-4); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-border); text-decoration: none; overflow-wrap: anywhere; }
 .workspace .portal-client-list a:hover { text-decoration: underline; }
 @media (max-width: 640px) { .portal-work-time { grid-template-columns: minmax(0, 1fr); } }
 

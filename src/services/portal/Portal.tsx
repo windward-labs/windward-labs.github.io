@@ -82,7 +82,7 @@ function AuthenticatedPortal() {
         <section className="section stack">
           <div className="row">
             <h1>{actor.staff ? 'Clients' : 'Your accounts'}</h1>
-            {actor.staff && <button type="button" className="plain-button" aria-expanded={showNewClient} aria-controls="new-client-section" onClick={()=>setShowNewClient(value=>!value)}>Add new client</button>}
+            {actor.staff && <button type="button" className="action" aria-expanded={showNewClient} aria-controls="new-client-section" onClick={()=>setShowNewClient(value=>!value)}>Add new client</button>}
           </div>
           <p className="muted">{actor.staff ? 'Open a client to manage projects, billing, and access.' : clients.length ? 'Choose your client account.' : 'Your email is not assigned to a client account yet. Contact Windward to arrange access.'}</p>
           {actor.staff ? <><div className="portal-client-list">{clients.map(item=><a key={item.id} href={clientUrl(item.id)}>{item.name}<span className="caption muted">{item.active_tasks} active projects</span></a>)}</div><div><button type="button" className="plain-button" aria-expanded={showAccounts} aria-controls="staff-account-balances" onClick={()=>setShowAccounts(value=>!value)}>{showAccounts ? 'Hide balances' : 'View account balances'}</button></div></> : null}
@@ -117,7 +117,7 @@ export function StaffProjects({clients,email,api}:{clients:ClientSummary[];email
     {loading && <p role="status">Loading projects…</p>}
     {failed.length>0 && <div><p role="alert">Could not load projects for {failed.join(', ')}.</p><button type="button" className="plain-button" disabled={loading} onClick={()=>setRevision(value=>value+1)}>Retry loading projects</button></div>}
     <WorkLogForm clients={details} email={email} api={api} onSaved={saved=>setDetails(current=>current.map(item=>item.id===saved.id ? saved : item))}/>
-    {!loading && !details.some(client=>client.tasks.some(canLogHours)) && <p className="caption muted">Open a client below to create a project or manage its time allocation.</p>}
+    {!loading && !details.some(client=>client.tasks.some(task=>task.status!=='completed' && canLogHours(task))) && <p className="caption muted">Open a client below to create a project or manage its time allocation.</p>}
   </section>;
 }
 
@@ -140,12 +140,12 @@ function ProjectPicker({projects,value,onChange,disabled}:{projects:StaffProject
       else if(event.key==='ArrowDown' || event.key==='ArrowUp'){event.preventDefault();if(!open)activate();else setHighlight(current=>Math.max(0,Math.min(matches.length-1,current+(event.key==='ArrowDown' ? 1 : -1))));}
       else if(event.key==='Enter' && open){event.preventDefault();if(matches[highlight])choose(matches[highlight].task.id);}
     }}/><button type="button" className="portal-picker-toggle" aria-label="Choose project" aria-expanded={open} disabled={disabled} onClick={()=>{if(open)setOpen(false);else{input.current?.focus();activate();}}}>⌄</button></div>
-    {open && <div className="portal-project-options"><ul id={`${controlId}-options`} role="listbox" aria-label="Projects">{matches.map((project,index)=><li key={project.task.id} id={`${controlId}-option-${index}`} role="option" aria-selected={value===project.task.id} className={highlight===index ? 'portal-option-highlight' : undefined} onMouseDown={event=>event.preventDefault()} onMouseMove={()=>setHighlight(index)} onClick={()=>choose(project.task.id)}><span>{project.task.title}</span><span className="caption muted">{project.client.name}{project.recent ? ' · Recent' : ''}{project.task.status==='completed' ? ' · Completed' : ''}</span></li>)}</ul>{!matches.length && <p className="caption muted">No matching projects.</p>}</div>}
+    {open && <div className="portal-project-options"><ul id={`${controlId}-options`} role="listbox" aria-label="Projects">{matches.map((project,index)=><li key={project.task.id} id={`${controlId}-option-${index}`} role="option" aria-selected={value===project.task.id} className={highlight===index ? 'portal-option-highlight' : undefined} onMouseDown={event=>event.preventDefault()} onMouseMove={()=>setHighlight(index)} onClick={()=>choose(project.task.id)}><span>{project.task.title}</span><span className="caption muted">{project.client.name}{project.recent ? ' · Recent' : ''}</span></li>)}</ul>{!matches.length && <p className="caption muted">No matching projects.</p>}</div>}
   </div>;
 }
 
 function WorkLogForm({clients,email,api,onSaved,initialProjectId=''}:{clients:ClientDetail[];email:string;api:Api;onSaved:(client:ClientDetail)=>void;initialProjectId?:string}) {
-  const projects=staffProjects(clients,email).filter(({task})=>canLogHours(task));
+  const projects=staffProjects(clients,email).filter(({task})=>task.status!=='completed' && canLogHours(task));
   const [projectId,setProjectId]=useState(initialProjectId);
   const selected=projects.find(project=>project.task.id===projectId) || (!projectId ? projects.find(project=>project.recent>0) : undefined);
   const [hours,setHours]=useState('');
