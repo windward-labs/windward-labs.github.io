@@ -318,11 +318,11 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
           <label>Credit pack<select name="credits">{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label>
           <Field label="Amount received (USD)" name="amount" type="number" min={0.01} step={0.01}/><Field label="Bank transaction reference" name="reference" maxLength={200}/><Field label="Date received (UTC)" name="receivedDate" type="date"/>
           <label>Private verification note<textarea name="note" required maxLength={2000} rows={3} placeholder="Where you verified the incoming wire"/></label>
-          <label><input type="checkbox" name="verified" required/> I verified this wire has arrived in our bank account and matches this client and credit pack.</label>
+          <label className="portal-checkbox"><input type="checkbox" name="verified" required/><span>I verified this wire has arrived in our bank account and matches this client and credit pack.</span></label>
           <p className="caption muted">Submitting adds credits immediately. Use the bank’s unique transaction reference. The amount must match the selected pack. Pay issued invoices separately.</p>
         </MutationForm></section>
         <section className="section stack"><h2>Wire payments</h2><MutationForm key={`${client.wire_enabled}-${client.wire_instructions}`} label="Save wire settings" reset={false} submit={async(form)=>mutate('wire-settings','PATCH',{enabled:form.get('wireEnabled')==='on',instructions:form.get('wireInstructions')})}>
-          <label><input type="checkbox" name="wireEnabled" defaultChecked={!!client.wire_enabled}/> Allow this client to pay by wire</label>
+          <label className="portal-checkbox"><input type="checkbox" name="wireEnabled" defaultChecked={!!client.wire_enabled}/><span>Allow this client to pay by wire</span></label>
           <label>Wire instructions<textarea name="wireInstructions" maxLength={5000} rows={8} defaultValue={client.wire_instructions || ''} placeholder="Beneficiary, bank name, wire routing number, account number, and any international wire details"/></label>
           <p className="caption muted">Shown in this client’s checkout only when enabled. Confirm receipt before adding credits.</p>
         </MutationForm></section>
