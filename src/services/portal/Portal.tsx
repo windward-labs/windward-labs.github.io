@@ -380,14 +380,16 @@ function Billing({actor,client,api,setClient}:{actor:Actor;client:ClientDetail;a
         <label>Billing email<input name="email" type="email" required maxLength={254} defaultValue={client.members[0] || ''}/></label>
       </MutationForm>}
     </>}
-    {invoices.map(invoice=><InvoiceCard key={invoice.id} invoice={invoice} clientId={client.id} staff={actor.staff} busy={!!busy} working={busy===invoice.id} api={api} action={operation=>void action(invoice.id,operation)}/>)}
+    {invoices.map(invoice=><InvoiceCard key={invoice.id} invoice={invoice} clientId={client.id} wireAvailable={!!client.wire_available} staff={actor.staff} busy={!!busy} working={busy===invoice.id} api={api} action={operation=>void action(invoice.id,operation)}/>)}
     {error && <p role="alert">{error}</p>}
   </section>;
 }
 
-function InvoiceCard({invoice,clientId,staff,busy,working,api,action}:{invoice:BillingInvoice;clientId:string;staff:boolean;busy:boolean;working:boolean;api:Api;action:(operation:'issue'|'refresh'|'void')=>void}) {
+function InvoiceCard({invoice,clientId,wireAvailable,staff,busy,working,api,action}:{invoice:BillingInvoice;clientId:string;wireAvailable:boolean;staff:boolean;busy:boolean;working:boolean;api:Api;action:(operation:'issue'|'refresh'|'void')=>void}) {
   const [copied,setCopied]=useState(false), [copyError,setCopyError]=useState(''), [menuOpen,setMenuOpen]=useState(false);
   const menu=useRef<HTMLDetailsElement>(null);
+  const [showWire,setShowWire]=useState(false);
+  const wireDialogId=`invoice-wire-${invoice.id}`;
   useEffect(()=>{
     if(!menuOpen)return;
     const dismiss=(event:PointerEvent)=>{if(event.target instanceof Node && !menu.current?.contains(event.target) && menu.current)menu.current.open=false;};
@@ -404,11 +406,16 @@ function InvoiceCard({invoice,clientId,staff,busy,working,api,action}:{invoice:B
       {invoice.status==='open' && invoice.hosted_invoice_url && (staff ? <button type="button" className="action" onClick={()=>void copyLink()} aria-live="polite">{copied ? 'Copied ✓' : 'Copy payment link'}</button> : <a className="action" href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer">Pay invoice</a>)}
       <details ref={menu} className="portal-invoice-menu" onToggle={event=>setMenuOpen(event.currentTarget.open)}><summary aria-label="More invoice actions"><span aria-hidden="true">⋯</span></summary><div className="portal-invoice-popover">
         <div className="portal-invoice-info"><p className="caption muted">{invoice.number || 'Unissued draft'}</p>{staff && <p className="caption">{invoice.email}</p>}{invoice.status==='draft' && <p className="caption muted">Approval creates the bill.</p>}</div>
+        {invoice.status==='open' && wireAvailable && <button type="button" aria-haspopup="dialog" aria-controls={wireDialogId} onClick={()=>{if(menu.current)menu.current.open=false;setShowWire(true);}}>Pay by wire</button>}
         {invoice.hosted_invoice_url && <><a href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer">Open invoice</a><PaymentDocument clientId={clientId} entryId={`invoice:${invoice.id}`} purchase={false} api={api}/></>}
         {invoice.status==='open' && <button type="button" disabled={busy} onClick={()=>action('refresh')}>{working ? 'Checking…' : 'Check payment status'}</button>}
         {staff && (invoice.status==='draft'||invoice.status==='open') && <details className="portal-invoice-cancel"><summary>{invoice.status==='draft' ? 'Cancel draft' : 'Void invoice'}</summary><div className="stack"><p className="caption muted">{invoice.status==='draft' ? 'Cancel this draft to review an updated bill.' : 'This cancels the bill and returns its credits to the unbilled balance.'}</p><button type="button" disabled={busy} onClick={()=>action('void')}>{working ? 'Saving…' : invoice.status==='draft' ? 'Confirm cancellation' : 'Confirm void'}</button></div></details>}
       </div></details>
     </div>{copyError && <p className="caption portal-invoice-error" role="alert">{copyError}</p>}
+    {invoice.status==='open' && wireAvailable && <ProjectDialog id={wireDialogId} title="Pay by wire" open={showWire} busy={false} onClose={()=>setShowWire(false)}>
+      {showWire && <div className="stack"><p>Invoice {invoice.number || invoice.id} · {monthName(invoice.period)}</p><div className="row"><span>Amount due</span><strong>{formatPrice(invoice.amount_cents)} USD</strong></div><p>Payment reference: {invoice.number || invoice.id}</p><WireInstructions clientId={clientId} api={api}/><p className="caption muted">Include the invoice reference with your transfer. Contact Windward after sending payment so we can confirm receipt. The invoice remains unpaid until receipt is confirmed.</p></div>}
+    </ProjectDialog>}
+
   </div>;
 }
 
