@@ -23,7 +23,7 @@ async function clientAccess(db, actor, clientId) {
   if (!actor.staff && !await query(db, 'SELECT 1 FROM client_members WHERE client_id = ? AND email = ?',clientId,actor.email).first()) throw new PortalError(404,'Client not found.');
   return client;
 }
-async function detail(db, actor, clientId) {
+async function detail(db, actor, clientId, defaultInstructions='') {
   // Read authorization and data in a single primary database session.
   const client = await clientAccess(db,actor,clientId);
   const [members,tasks,updates,ledger,attachments,invoices,balances,sources,workDates] = await db.batch([
@@ -37,7 +37,7 @@ async function detail(db, actor, clientId) {
     query(db,`SELECT s.* FROM update_sources s JOIN tasks t ON t.id=s.task_id WHERE t.client_id=? AND ?=1`,clientId,actor.staff ? 1 : 0),
     query(db,'SELECT d.* FROM project_date_changes d JOIN tasks t ON t.id=d.task_id WHERE t.client_id=? AND ?=1 ORDER BY d.created_at,d.id',clientId,actor.staff ? 1 : 0),
   ]);
-  return { ...client,...balances.results[0],...await agreementRecords(db,actor,clientId),...await projectAttribution(db,clientId), members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
+  return { ...client,wire_instructions:actor.staff ? (client.wire_instructions || defaultInstructions) : '',wire_available:!!client.wire_enabled && !!(client.wire_instructions || defaultInstructions),...balances.results[0],...await agreementRecords(db,actor,clientId),...await projectAttribution(db,clientId), members: members.results.map(row => row.email), tasks: tasks.results, updates: updates.results, ledger: ledger.results, attachments:attachments.results, invoices:invoices.results,workEntries:await workEntries(db,actor,clientId),...(actor.staff ? {sourceReferences:sources.results,workDateHistory:workDates.results} : {}) };
 }
 
 async function addProjectUpdate(db,actor,clientId,taskId,body) {
@@ -105,7 +105,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       const result = await (actor.staff
         ? query(db,`SELECT c.*,${invoicedCreditsSql} AS invoiced_credits, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c ORDER BY c.name`)
         : query(db,`SELECT c.*,${invoicedCreditsSql} AS invoiced_credits, (SELECT count(*) FROM tasks t WHERE t.client_id=c.id AND t.status IN ('queued','in_progress')) AS active_tasks FROM clients c JOIN client_members m ON m.client_id=c.id WHERE m.email=? ORDER BY c.name`,actor.email)).all();
-      return json({clients: result.results});
+      return json({clients: result.results.map(client=>({...client,wire_instructions:actor.staff ? client.wire_instructions : ''}))});
     }
     if (path === '/v1/clients' && method === 'POST') {
       requireStaff(actor);
@@ -118,7 +118,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
         query(db,'INSERT INTO clients (id,name) VALUES (?,?)',clientId,name),
         query(db,'INSERT INTO client_members (client_id,email) VALUES (?,?)',clientId,email),
       ]);
-      return json(await detail(db,actor,clientId),201);
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS),201);
     }
     const attributionRoute=path.match(/^\/v1\/clients\/([^/]+)\/project-attribution(?:\/(history|preview))?$/);
     if(attributionRoute) {
@@ -130,6 +130,52 @@ async function handleAuthorizedApi(request, env, authenticate) {
       if(method==='POST' && attributionRoute[2]==='preview')return json(await previewProjectAttribution(db,actor,clientId,await bodyOf(request,300000)));
       if(method!=='POST' || attributionRoute[2])throw new PortalError(405,'Method not allowed.');
       return json(await adjustProjectAttribution(db,actor,clientId,await bodyOf(request,300000)));
+    }
+    const wireInstructionsRoute=path.match(/^\/v1\/clients\/([^/]+)\/wire-instructions$/);
+    if(wireInstructionsRoute) {
+      if(method!=='GET')throw new PortalError(405,'Method not allowed.');
+      const client=await clientAccess(db,actor,id(wireInstructionsRoute[1]));
+      if(!client.wire_enabled)throw new PortalError(404,'Wire payments are not enabled.');
+      const instructions=client.wire_instructions || env.WIRE_INSTRUCTIONS;
+      if(!instructions)throw new PortalError(404,'Wire instructions are not configured.');
+      return json({instructions});
+    }
+    const wireRoute=path.match(/^\/v1\/clients\/([^/]+)\/wire-settings$/);
+    if(wireRoute) {
+      requireStaff(actor);requireAgentScope(actor,'admin');
+      const clientId=id(wireRoute[1]);
+      await clientAccess(db,actor,clientId);
+      if(method!=='PATCH')throw new PortalError(405,'Method not allowed.');
+      const body=await bodyOf(request);
+      if(typeof body.enabled!=='boolean' || typeof body.instructions!=='string' || body.instructions.length>5000)throw new PortalError(400,'Provide a checkbox value and wire instructions up to 5,000 characters.');
+      const instructions=body.instructions.trim();
+      if(body.enabled && !instructions && !env.WIRE_INSTRUCTIONS)throw new PortalError(400,'Add wire instructions before enabling wire payments.');
+      await query(db,'UPDATE clients SET wire_enabled=?,wire_instructions=? WHERE id=?',body.enabled ? 1 : 0,instructions,clientId).run();
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
+    }
+    const wireReceiptRoute=path.match(/^\/v1\/clients\/([^/]+)\/wire-receipts$/);
+    if(wireReceiptRoute) {
+      requireStaff(actor);requireAgentScope(actor,'admin');
+      const clientId=id(wireReceiptRoute[1]);
+      await clientAccess(db,actor,clientId);
+      if(method!=='POST')throw new PortalError(405,'Method not allowed.');
+      const body=await bodyOf(request),receiptId=id(body.id);
+      if(![8,16,64,192].includes(body.credits))throw new PortalError(400,'Choose a purchased credit pack.');
+      if(body.verified!==true)throw new PortalError(400,'Confirm that the wire has arrived in your bank account.');
+      if(body.amountCents!==body.credits*7500)throw new PortalError(400,'The received USD amount must match the selected credit pack.');
+      const bankReference=text(body.reference,'Bank transaction reference',200).toUpperCase();
+      if(!/^[A-Z0-9][A-Z0-9._/-]*$/.test(bankReference))throw new PortalError(400,'Use a bank reference containing letters, numbers, dots, slashes, underscores or hyphens.');
+      const reference=`wire:${bankReference}`,ledgerId=`wire:${receiptId}`;
+      const receivedAt=eventTimestamp(body.receivedAt),note=text(body.note,'Verification note');
+      if(Date.parse(receivedAt)>Date.now())throw new PortalError(400,'Receipt date cannot be in the future.');
+      const existing=await query(db,'SELECT l.*,r.amount_cents,r.received_at,r.verification_note FROM ledger l LEFT JOIN wire_receipts r ON r.ledger_id=l.id WHERE l.reference=? OR l.id=?',reference,ledgerId).first();
+      if(existing) {
+        if(existing.client_id!==clientId || existing.credits!==body.credits || existing.reference!==reference || existing.amount_cents!==body.amountCents || existing.received_at!==receivedAt || existing.verification_note!==note)throw new PortalError(409,'This wire reference or receipt ID was already used with different details.');
+      } else await db.batch([
+        query(db,`INSERT INTO ledger (id,client_id,kind,credits,reference,note,created_by,actor_email) VALUES (?,?,'purchase',?,?,?,?,?)`,ledgerId,clientId,body.credits,reference,`Wire payment confirmed · USD ${(body.amountCents/100).toFixed(2)} · Received ${receivedAt.slice(0,10)}`,actor.id,actor.email),
+        query(db,'INSERT INTO wire_receipts (ledger_id,amount_cents,received_at,verification_note) VALUES (?,?,?,?)',ledgerId,body.amountCents,receivedAt,note),
+      ]);
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const agreementRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/(charges|time-entries|agreement)$/);
     if(agreementRoute) {
@@ -146,7 +192,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       if(resource==='agreement' && method==='PATCH')await changeAgreement(db,actor,task,await bodyOf(request));
       else if(resource!=='agreement' && method==='POST')await recordAgreementWork(db,actor,taskId,resource,await bodyOf(request));
       else throw new PortalError(405,'Method not allowed.');
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const entryRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/work-entries(?:\/(reallocate|[^/]+))?$/);
     if(entryRoute) {
@@ -159,7 +205,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       else if(method==='POST' && action==='reallocate')await reallocateWork(db,actor,clientId,taskId,await bodyOf(request,300000));
       else if(method==='PATCH' && action && action!=='reallocate')await correctWorkEntry(db,actor,clientId,taskId,id(action),await bodyOf(request));
       else throw new PortalError(405,'Method not allowed.');
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const workDateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/date$/);
     if(workDateRoute) {
@@ -184,7 +230,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
         ]);
         if(!await query(db,'SELECT 1 FROM project_date_changes WHERE id=?',changeId).first())throw new PortalError(409,'Project changed. Reload before correcting its work date.');
       }
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const editRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/details$/);
     if(editRoute) {
@@ -210,7 +256,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
         ]);
         if(!await query(db,'SELECT 1 FROM project_edits WHERE id=?',editId).first())throw new PortalError(409,'Project changed. Reload before editing its details.');
       }
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const dateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates\/([^/]+)(?:\/(restore))?$/);
     if(dateRoute) {
@@ -226,7 +272,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
           hide ? query(db,`UPDATE task_updates SET hidden_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),hidden_by=?,hidden_actor_email=? WHERE id=? AND ${condition}`,actor.id,actor.email,updateId)
             : query(db,`UPDATE task_updates SET hidden_at=NULL,hidden_by=NULL,hidden_actor_email=NULL WHERE id=? AND ${condition}`,updateId),
         ]);
-        return json(await detail(db,actor,clientId));
+        return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
       }
       const body=await bodyOf(request);
       if(Object.keys(body).some(key=>key!=='occurredAt'))throw new PortalError(400,'This endpoint only changes occurredAt.');
@@ -235,7 +281,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
         query(db,`INSERT INTO update_date_changes (id,update_id,previous_date,occurred_at,created_by,actor_email) SELECT ?,id,COALESCE(occurred_at,created_at),?,?,? FROM task_updates WHERE id=? AND COALESCE(occurred_at,created_at)!=?`,crypto.randomUUID(),occurredAt,actor.id,actor.email,updateId,occurredAt),
         query(db,'UPDATE task_updates SET occurred_at=? WHERE id=?',occurredAt,updateId),
       ]);
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const updateRoute=path.match(/^\/v1\/clients\/([^/]+)\/tasks\/([^/]+)\/updates$/);
     if(updateRoute) {
@@ -243,7 +289,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
       requireStaff(actor);
       const clientId=id(updateRoute[1]);await clientAccess(db,actor,clientId);
       await addProjectUpdate(db,actor,clientId,id(updateRoute[2]),await bodyOf(request));
-      return json(await detail(db,actor,clientId));
+      return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     }
     const documentRoute=path.match(/^\/v1\/clients\/([^/]+)\/activity\/([^/]+)\/document$/);
     if (documentRoute) {
@@ -273,20 +319,20 @@ async function handleAuthorizedApi(request, env, authenticate) {
         else if (action==='issue') await issueInvoice(env,db,clientId,invoiceId);
         else if (action==='refresh') await refreshInvoice(env,db,clientId,invoiceId);
         else if (action==='void') await voidInvoice(env,db,clientId,invoiceId);
-        return json(await detail(db,actor,clientId));
+        return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
       }
       throw new PortalError(405,'Method not allowed.');
     }
     const route = path.match(/^\/v1\/clients\/([^/]+)(?:\/(members|purchases|tasks|checkout)(?:\/([^/]+))?)?$/);
     if (!route) throw new PortalError(404,'Not found.');
     const clientId = id(route[1]), resource = route[2], taskId = route[3];
-    if (!resource && method === 'GET') return json(await detail(db,actor,clientId));
+    if (!resource && method === 'GET') return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
     if (resource === 'checkout' && method === 'POST' && !taskId) {
       await clientAccess(db,actor,clientId);
       const body = await bodyOf(request);
       const result = await fulfillCheckout(env,db,body.sessionId,clientId);
       if (result.status==='ignored') throw new PortalError(400,'Payment is not for a Windward credit pack.');
-      return json({...result,client:await detail(db,actor,clientId)});
+      return json({...result,client:await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS)});
     }
     requireStaff(actor);
     await clientAccess(db,actor,clientId);
@@ -320,7 +366,7 @@ async function handleAuthorizedApi(request, env, authenticate) {
     } else if (resource === 'tasks' && method === 'PATCH' && taskId) {
       await addProjectUpdate(db,actor,clientId,id(taskId),body);
     } else throw new PortalError(405,'Method not allowed.');
-    return json(await detail(db,actor,clientId));
+    return json(await detail(db,actor,clientId,env.WIRE_INSTRUCTIONS));
   } catch (error) {
     if (error instanceof PortalError) return json({error:error.message},error.status);
     if (/Attribution conflict:/i.test(String(error)))return json({error:'Attribution conflict: refresh entry versions, allocations and projects before retrying.'},409);

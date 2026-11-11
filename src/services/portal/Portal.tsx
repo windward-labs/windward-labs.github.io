@@ -263,7 +263,7 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       {copyStatus && <p className="caption" role="status">{copyStatus}</p>}
     </section>
     {paymentReturn && <PaymentReturn client={client} api={api} setClient={setClient} />}
-    {checkout && <Checkout client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
+    {checkout && <Checkout api={api} client={client} email={actor.email} automaticPayments={!!actor.automaticPayments} />}
     {!checkoutOnly && <>
       {actor.staff && <section className="section stack"><h2>Log work</h2><WorkLogForm clients={[client]} email={actor.email} api={api} onSaved={setClient}/></section>}
       <section id="active-projects" className="section"><div className="row section-title"><div><h2>Active Projects</h2><p className="caption muted">{activeProjects.length} active</p></div><div className="portal-actions">{actor.staff && <button type="button" className="plain-button" aria-haspopup="dialog" aria-controls="record-work-form" onClick={()=>{setWorkSuccess(null);setShowWorkForm(true);}}>New Project</button>}</div></div>
@@ -308,12 +308,24 @@ function ClientView({actor,client,api,setClient,checkoutOnly,paymentReturn}:{act
       {actor.staff && <div className="section"><button type="button" className="plain-button" aria-expanded={showBilling} aria-controls="client-billing-details" onClick={()=>setShowBilling(value=>!value)}>{showBilling ? 'Hide billing and access' : 'Manage billing and access'}</button></div>}
       <div id="client-billing-details" hidden={actor.staff && !showBilling}>
       <Billing actor={actor} client={client} api={api} setClient={setClient}/>
-      <section className="section"><h2 className="portal-heading">Credit activity</h2>{activity.length ? <div className="table-scroll"><table className="portal-credit-table" aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date (UTC)</th><th>Activity</th><th>Credits</th><th><span className="portal-pack-legend">Invoice</span></th></tr></thead><tbody>{activity.map(entry=><tr key={entry.id}><td><time dateTime={entry.occurred_at || entry.created_at}>{new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(entry.occurred_at || entry.created_at))}</time></td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : entry.allocation ? 'Work allocated' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td><td>{(entry.kind==='purchase' || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
+      <section className="section"><h2 className="portal-heading">Credit activity</h2>{activity.length ? <div className="table-scroll"><table className="portal-credit-table" aria-label="Credit purchases, work charges, refunds, and invoice transfers"><thead><tr><th>Date (UTC)</th><th>Activity</th><th>Credits</th><th><span className="portal-pack-legend">Invoice</span></th></tr></thead><tbody>{activity.map(entry=><tr key={entry.id}><td><time dateTime={entry.occurred_at || entry.created_at}>{new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(entry.occurred_at || entry.created_at))}</time></td><td className="wrap">{entry.note}<div className="caption muted">{entry.kind === 'purchase' ? 'Purchase confirmed' : entry.kind === 'refund' ? 'Credits returned' : entry.kind==='billing' ? entry.credits>0 ? 'Moved to invoice · Payment still due' : 'Invoice voided' : entry.allocation ? 'Work allocated' : 'Work recorded'}{actor.staff && entry.reference ? ` · ${entry.reference}` : ''}</div></td><td>{entry.credits > 0 ? '+' : ''}{entry.credits}</td><td>{((entry.kind==='purchase' && !entry.reference?.startsWith('wire:')) || (entry.kind==='billing' && entry.credits>0)) && <PaymentDocument clientId={client.id} entryId={entry.id} purchase={entry.kind==='purchase'} api={api}/>}</td></tr>)}</tbody></table></div> : <p className="muted">No credit activity yet. Successful purchases appear here automatically.</p>}</section>
       {actor.staff && <>
         {!actor.automaticPayments && <section className="section"><h2 className="portal-heading">Confirm credit purchase</h2><MutationForm label="Add confirmed credits" submit={async(form)=>mutate('purchases','POST',{credits:Number(form.get('credits')),reference:form.get('reference'),note:form.get('note')})}>
           <label>Credit pack<select name="credits">{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label><Field label="Stripe PaymentIntent ID" name="reference" maxLength={200} placeholder="pi_…"/><Field label="Verification note" name="note" maxLength={2000} placeholder="Payment confirmed in Stripe"/>
           <p className="caption muted">Check the successful payment and pack in Stripe first. Use its PaymentIntent ID; each payment can only be credited once.</p>
         </MutationForm></section>}
+        <section className="section stack"><h2>Confirm received wire</h2><MutationForm label="Confirm receipt and add credits" submit={async(form,id)=>mutate('wire-receipts','POST',{id,credits:Number(form.get('credits')),amountCents:Math.round(Number(form.get('amount'))*100),reference:form.get('reference'),receivedAt:new Date(`${form.get('receivedDate')}T00:00:00.000Z`).toISOString(),note:form.get('note'),verified:form.get('verified')==='on'})}>
+          <label>Credit pack<select name="credits">{creditPacks.map(pack=><option key={pack.credits} value={pack.credits}>{pack.credits} credits · {formatPrice(pack.amountCents)}</option>)}</select></label>
+          <Field label="Amount received (USD)" name="amount" type="number" min={0.01} step={0.01}/><Field label="Bank transaction reference" name="reference" maxLength={200}/><Field label="Date received (UTC)" name="receivedDate" type="date"/>
+          <label>Private verification note<textarea name="note" required maxLength={2000} rows={3} placeholder="Where you verified the incoming wire"/></label>
+          <label><input type="checkbox" name="verified" required/> I verified this wire has arrived in our bank account and matches this client and credit pack.</label>
+          <p className="caption muted">Submitting adds credits immediately. Use the bank’s unique transaction reference. The amount must match the selected pack. Pay issued invoices separately.</p>
+        </MutationForm></section>
+        <section className="section stack"><h2>Wire payments</h2><MutationForm key={`${client.wire_enabled}-${client.wire_instructions}`} label="Save wire settings" reset={false} submit={async(form)=>mutate('wire-settings','PATCH',{enabled:form.get('wireEnabled')==='on',instructions:form.get('wireInstructions')})}>
+          <label><input type="checkbox" name="wireEnabled" defaultChecked={!!client.wire_enabled}/> Allow this client to pay by wire</label>
+          <label>Wire instructions<textarea name="wireInstructions" maxLength={5000} rows={8} defaultValue={client.wire_instructions || ''} placeholder="Beneficiary, bank name, wire routing number, account number, and any international wire details"/></label>
+          <p className="caption muted">Shown in this client’s checkout only when enabled. Confirm receipt before adding credits.</p>
+        </MutationForm></section>
         <section className="section"><h2 className="portal-heading">Client access</h2><ul className="portal-members">{client.members.map(email=><li key={email}><span>{email}</span><MutationForm label="Remove access" reset={false} submit={async()=>mutate('members','DELETE',{email})}/></li>)}</ul><MutationForm label="Allow email" submit={async(form)=>mutate('members','POST',{email:form.get('email')})}><Field label="Client email" name="email" type="email" maxLength={254}/><p className="caption muted">Share the client link yourself. No invitation email is sent.</p></MutationForm></section>
       </>}
       </div>
@@ -618,9 +630,23 @@ function AttachmentList({attachments,clientId,taskId,api}:{attachments:Attachmen
     }}>{downloading === attachment.id ? 'Downloading…' : attachment.name}</button><span className="caption muted">{attachment.size < 1024 * 1024 ? `${Math.max(1,Math.ceil(attachment.size / 1024))} KB` : `${(attachment.size / (1024 * 1024)).toFixed(1)} MB`}</span></li>)}</ul>{downloadError && <p role="alert">{downloadError}</p>}</div>;
 }
 
-function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:string;automaticPayments:boolean}) {
+function WireInstructions({clientId,api}:{clientId:string;api:Api}) {
+  const [instructions,setInstructions]=useState(''),[visible,setVisible]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const detailsId=useId();
+  return <div className="stack"><button type="button" className="plain-button" disabled={busy} aria-expanded={visible} aria-controls={detailsId} onClick={async()=>{
+    if(visible){setVisible(false);return;} setBusy(true);setError('');
+    try {const result=await api<{instructions:string}>(`/clients/${clientId}/wire-instructions`);setInstructions(result.instructions);setVisible(true);}
+    catch(error){setError(error instanceof Error ? error.message : 'Unable to load wire instructions.');}
+    finally{setBusy(false);}
+  }}>{busy ? 'Loading…' : visible ? 'Hide account details' : 'Reveal account details'}</button>
+  <div id={detailsId} hidden={!visible}>{visible && <p style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{instructions}</p>}</div>
+  {error && <p role="alert">{error}</p>}</div>;
+}
+
+function Checkout({client,email,automaticPayments,api}:{client:ClientDetail;email:string;automaticPayments:boolean;api:Api}) {
   const clientId = client.id;
   const [credits,setCredits] = useState<8 | 16 | 64 | 192>(64);
+  const [wireSelected,setWireSelected] = useState(false);
   const pack = creditPacks.find(pack=>pack.credits===credits) || creditPacks.find(pack=>pack.credits===64)!;
   useEffect(()=>{if(!creditPacks.some(pack=>pack.credits===credits))setCredits(64);},[credits]);
   const testMode = import.meta.env.DEV;
@@ -659,7 +685,8 @@ function Checkout({client,email,automaticPayments}:{client:ClientDetail;email:st
         <div className="row"><h3>Order summary</h3><span className="portal-info portal-checkout-info"><button type="button" className="portal-info-button" aria-label="About credit purchases" aria-describedby="checkout-purchase-info">ⓘ</button><span id="checkout-purchase-info" role="tooltip"><span>We’ll confirm scope before starting.</span>{client.balance<0 && <span>Purchased credits first cover your {-client.balance} unbilled credits owed.</span>}{!!client.invoiced_credits && <span>Pay issued invoices separately.</span>}<span>{automaticPayments ? 'Credits are added automatically after Stripe confirms payment.' : 'Windward adds credits after confirming payment.'}</span></span></span></div>
         <div className="row"><span>{pack.name}<br/><span className="caption muted">{pack.credits} credits</span></span><span>{formatPrice(pack.amountCents)}</span></div>
         <dl className="portal-checkout-balance"><div className="row"><dt>Before purchase</dt><dd>{client.balance<0 ? `${-client.balance} credits owed` : `${client.balance} credits`}</dd></div><div className="row"><dt>After purchase</dt><dd><strong>{client.balance+credits<0 ? `${-(client.balance+credits)} credits owed` : `${client.balance+credits} credits`}</strong></dd></div></dl>
-        <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>
+        {!!client.wire_available && <label>Payment method<select value={wireSelected ? 'wire' : 'stripe'} onChange={event=>setWireSelected(event.target.value==='wire')}><option value="stripe">Stripe</option><option value="wire">Wire transfer</option></select></label>}
+        {wireSelected && !!client.wire_available ? <div className="stack"><h3>Wire instructions</h3><WireInstructions key={client.id} clientId={client.id} api={api}/><p>Amount: {formatPrice(pack.amountCents)}<br/>Reference: {client.id} · {pack.credits} credits</p><p className="caption muted">Include this reference with your transfer. Credits are added after Windward confirms receipt.</p></div> : <div>{url ? <a className="action" href={url.href}>Continue to Stripe{testMode ? ' test checkout' : ''}</a> : <p role="alert">The test payment link for this pack has not been configured.</p>}</div>}
       </div>
     </div>
   </section>;

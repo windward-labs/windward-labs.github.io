@@ -37,6 +37,8 @@ function fixture(extraEnv = {}) {
   sqlite.exec('COMMIT');
   sqlite.exec(readFileSync(new URL('../backend/migrations/0011_project_agreements.sql',import.meta.url),'utf8'));
   sqlite.exec(readFileSync(new URL('../backend/migrations/0012_project_attribution.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0013_wire_payments.sql',import.meta.url),'utf8'));
+  sqlite.exec(readFileSync(new URL('../backend/migrations/0014_wire_receipts.sql',import.meta.url),'utf8'));
   let clock=new Date().toISOString();
   sqlite.function('strftime',{varargs:true},()=>clock);
   const wrap = (sql,values=[]) => ({
@@ -1152,4 +1154,71 @@ test('offline preview opens a sanitized snapshot read-only and fully moved sourc
     const totals=(await f.call(contact,f.path)).data.projectAttributionTotals;
     assert.deepEqual(totals.find(t=>t.task_id===f.tasks[0].id),{task_id:f.tasks[0].id,hours:0,credits:0});
   } finally {rmSync(directory,{recursive:true,force:true});}
+});
+
+ test('wire settings default off, require staff and instructions, and hide disabled instructions',async()=>{
+  const {call,client}=fixture();
+  const created=await client();
+  const path=`/clients/${created}`;
+  assert.equal((await call(staff,path)).data.wire_enabled,0);
+  assert.equal((await call(contact,`${path}/wire-settings`,'PATCH',{enabled:true,instructions:'Bank details'})).status,403);
+  assert.equal((await call(staff,`${path}/wire-settings`,'PATCH',{enabled:true,instructions:''})).status,400);
+  assert.equal((await call(staff,`${path}/wire-settings`,'PATCH',{enabled:true,instructions:'Bank details'})).status,200);
+  assert.equal((await call(contact,path)).data.wire_instructions,'');
+  assert.equal((await call(contact,`${path}/wire-instructions`)).data.instructions,'Bank details');
+  assert.equal((await call(outsider,`${path}/wire-instructions`)).status,404);
+  await call(staff,`${path}/wire-settings`,'PATCH',{enabled:false,instructions:'Bank details'});
+  assert.equal((await call(contact,path)).data.wire_instructions,'');
+  assert.equal((await call(staff,path)).data.wire_instructions,'Bank details');
+ });
+
+test('manual wire receipt requires bank verification, credits once and protects private notes',async()=>{
+ const {call,client,sqlite}=fixture();const clientId=await client(),otherId=await client();
+ const path=`/clients/${clientId}/wire-receipts`;
+ const body={id:crypto.randomUUID(),credits:8,amountCents:60000,reference:'bank-123',receivedAt:'2026-01-01T00:00:00.000Z',note:'Private bank statement check',verified:true};
+ assert.equal((await call(contact,path,'POST',body)).status,403);
+ assert.throws(()=>authorizeAgent({...staff,kind:'agent',scopes:['billing:work']},`/v1${path}`,'POST'),/not available/);
+ for(const invalid of [{verified:false},{amountCents:1},{credits:9},{receivedAt:'2999-01-01T00:00:00.000Z'},{note:''}])assert.equal((await call(staff,path,'POST',{...body,...invalid})).status,400);
+ assert.equal((await call(staff,path,'POST',body)).data.balance,8);
+ assert.equal((await call(staff,path,'POST',body)).data.balance,8);
+ assert.equal((await call(staff,path,'POST',{...body,id:crypto.randomUUID(),reference:'BANK-123'})).data.balance,8);
+ assert.equal((await call(staff,path,'POST',{...body,credits:16,amountCents:120000})).status,409);
+ assert.equal((await call(staff,`/clients/${otherId}/wire-receipts`,'POST',body)).status,409);
+ const result=await call(contact,`/clients/${clientId}`);
+ assert.equal(result.data.ledger.filter(row=>row.reference==='wire:BANK-123').length,1);
+ assert.equal(JSON.stringify(result.data).includes(body.note),false);
+ assert.equal(sqlite.prepare('SELECT verification_note FROM wire_receipts').get().verification_note,body.note);
+});
+
+test('shared wire instructions require membership and enabled client',async()=>{
+ const {call,client}=fixture({WIRE_INSTRUCTIONS:'Shared bank details'}),id=await client(),path=`/clients/${id}`;
+ assert.equal((await call(contact,`${path}/wire-instructions`)).status,404);
+ assert.equal((await call(staff,`${path}/wire-settings`,'PATCH',{enabled:true,instructions:''})).status,200);
+ assert.equal((await call(contact,path)).data.wire_available,true);
+ assert.equal((await call(contact,path)).data.wire_instructions,'');
+ assert.equal((await call(contact,`${path}/wire-instructions`)).data.instructions,'Shared bank details');
+ assert.equal((await call(outsider,`${path}/wire-instructions`)).status,404);
+ await call(staff,`${path}/wire-settings`,'PATCH',{enabled:false,instructions:''});
+ assert.equal((await call(contact,`${path}/wire-instructions`)).status,404);
+});
+
+test('wire details are absent from ordinary responses and require a fresh authorized reveal',async()=>{
+ const secret='PRIVATE_WIRE_DETAILS_CANARY',custom='PRIVATE_CLIENT_WIRE_CANARY';
+ const {call,client,DB}=fixture({WIRE_INSTRUCTIONS:secret});const clientId=await client(),path=`/clients/${clientId}`;
+ await call(staff,`${path}/wire-settings`,'PATCH',{enabled:true,instructions:custom});
+ for(const route of ['/me','/clients',path]) {
+   const result=await call(contact,route);
+   assert.equal(result.status,200);
+   assert.equal(JSON.stringify(result.data).includes(secret),false);
+   assert.equal(JSON.stringify(result.data).includes(custom),false);
+ }
+ assert.equal((await call(null,`${path}/wire-instructions`)).status,401);
+ assert.equal((await call(outsider,`${path}/wire-instructions`)).status,404);
+ assert.equal((await call(contact,`${path}/wire-instructions`)).data.instructions,custom);
+ const response=await handleApi(new Request(`https://api.example.com/v1${path}/wire-instructions`),{DB,WIRE_INSTRUCTIONS:secret},async()=>contact);
+ assert.equal(response.status,200);assert.equal(response.headers.get('Cache-Control'),'no-store');
+ await call(staff,`${path}/members`,'DELETE',{email:contact.email});
+ assert.equal((await call(contact,`${path}/wire-instructions`)).status,404);
+ await call(staff,`${path}/wire-settings`,'PATCH',{enabled:false,instructions:custom});
+ assert.equal((await call(staff,`${path}/wire-instructions`)).status,404);
 });

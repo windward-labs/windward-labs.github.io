@@ -307,3 +307,47 @@ The [API guide](AGENT_API.md#correct-historical-project-attribution-without-chan
 documents permissions, preview, complete allocations, revisions and idempotency.
 The [review plan](reviews/historical-project-attribution.md) documents available
 evidence, missing historical records and the offline read-only preview workflow.
+
+### Optional client wire instructions
+
+Apply migration `0013_wire_payments.sql` before releasing the portal. Under a
+client’s **Manage billing and access → Wire payments**, staff can enter wire
+instructions and check **Allow this client to pay by wire**, then save. All
+clients default to disabled; enabling requires nonempty instructions. Enabled
+clients can select wire transfer when buying credits and see the selected pack
+amount and client reference. Disabling hides the instructions from client API
+responses as well as checkout while retaining them for staff.
+
+Apply `0014_wire_receipts.sql` for manual receipt confirmation. Staff can use
+**Confirm received wire** under billing and access, verify funds in the bank,
+and enter the pack, matching USD amount, receipt date, unique bank transaction
+reference, and private verification note. The required verification checkbox
+confirms the staff member checked receipt; the portal does not query the bank.
+Confirmation atomically creates an immutable purchase ledger entry, stores the
+receipt details, and adds credits. References are case-insensitive and unique
+across clients; matching retries do not add credits again. Receipt confirmation
+remains available after wire checkout is disabled, for transfers already sent.
+This purchases credits only; issued invoices must be paid separately. Wire
+entries show confirmation in activity without a Stripe document download.
+
+`POST /clients/{client}/wire-receipts` is staff/admin-only and accepts
+`{id,credits,amountCents,reference,receivedAt,note,verified:true}`. `id` is a UUID,
+`receivedAt` is an ISO timestamp, and the amount must equal the current pack price.
+Verification notes remain private in `wire_receipts`; ledger actor and timestamp
+record who confirmed the funds and when.
+
+Wire account details can use the server-only `WIRE_INSTRUCTIONS` secret as the
+shared default, with per-client instructions taking precedence. The bank PDF's
+verified transcription is prepared locally in the ignored
+`.agent-secrets/wire-instructions.txt` and `backend/.dev.vars`. Before production
+release, configure the Worker secret with:
+
+```sh
+npx wrangler secret put WIRE_INSTRUCTIONS --config backend/wrangler.jsonc < .agent-secrets/wire-instructions.txt
+```
+
+The client detail response includes `wire_available` but omits account details
+for client users. **Reveal account details** fetches
+`GET /clients/{client}/wire-instructions`, which requires membership and an enabled
+wire checkbox on every request. Responses are not cached. The source PDF is not
+published as a static asset.
